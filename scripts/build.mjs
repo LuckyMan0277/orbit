@@ -1,0 +1,11 @@
+import { build } from 'esbuild';
+import { mkdir, copyFile } from 'node:fs/promises';
+await mkdir('dist', { recursive: true });
+await build({ entryPoints: { app: 'src/app.js', mobile: 'src/mobile.js' }, tsconfigRaw: {}, bundle: true, splitting: true, format: 'esm', outdir: 'dist', entryNames: '[name]', chunkNames: 'chunks/[name]-[hash]', minify: true, target: 'chrome110', legalComments: 'linked', sourcemap: false });
+await copyFile('src/index.html', 'dist/index.html');
+await copyFile('src/mobile.html', 'dist/mobile.html');
+await copyFile('src/mobile.webmanifest', 'dist/mobile.webmanifest');
+await copyFile('src/mobile-sw.js', 'dist/mobile-sw.js');
+await copyFile('assets/orbit.svg', 'dist/orbit.svg');
+for (const size of [180, 192, 512]) await copyFile(`src/orbit-${size}.png`, `dist/orbit-${size}.png`);
+console.log('Frontend built: dist/');
