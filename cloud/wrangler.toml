@@ -1,0 +1,7 @@
+name = "orbit-account-service"
+main = "src/index.js"
+compatibility_date = "2025-07-18"
+
+kv_namespaces = [
+  { binding = "ACCOUNTS", id = "3723bc54d2b3484ba1d0869b55be0c08", preview_id = "79c5b632d3ad43dca1d55492140bed8b" }
+]

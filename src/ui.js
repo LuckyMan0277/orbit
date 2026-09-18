@@ -29,7 +29,6 @@ export const icons = {
   arrow: '<svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>',
   leaf: '<svg viewBox="0 0 24 24"><path d="M19 4C7 3 3 9 7 16s15 3 12-12ZM5 21 15 9"/></svg>',
   command: '<svg viewBox="0 0 24 24"><path d="M8 8V5a3 3 0 1 0-3 3h14a3 3 0 1 0-3-3v14a3 3 0 1 0 3-3H5a3 3 0 1 0 3 3Z"/></svg>',
-  qr: '<svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM15 15h2v2h-2zm3 0h2v5h-5v-2h3z"/></svg>',
   devices: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="12" height="9" rx="1"/><path d="M7 18h4m-2-4v4M17 8h4v11h-6v-8"/><path d="M18 16h2"/></svg>',
   bookmark: '<svg viewBox="0 0 24 24"><path d="M7 3h10v18l-5-3-5 3z"/><path d="M4 6v14l3-2"/></svg>',
   clipboard: '<svg viewBox="0 0 24 24"><rect x="6" y="5" width="13" height="16" rx="2"/><path d="M9 5V3h7v2M10 10h5m-5 4h5"/></svg>',

@@ -57,9 +57,9 @@ namespace Orbit {
                     if(!browser.StartsWith("HTTP/1.1 200",StringComparison.Ordinal))throw new Exception("normal browser request was rejected: "+browser);
                     string unauthorized=Raw(proxy.Port,"POST /api/v1/sessions HTTP/1.1\r\nHost: public-orbit.example\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
                     if(!unauthorized.StartsWith("HTTP/1.1 401",StringComparison.Ordinal))throw new Exception("public Host request bypassed authentication: "+unauthorized);
-                    string invite=server.CreateInvite("test");string[] parts=invite.Split('.');string body="{\"id\":\""+parts[0]+"\",\"code\":\""+parts[1]+"\",\"device\":\"phone\"}";
-                    string routed=Raw(proxy.Port,"POST /api/v1/pair/request HTTP/1.1\r\nHost: public-orbit.example\r\nContent-Type: application/json\r\nContent-Length: "+Encoding.UTF8.GetByteCount(body)+"\r\n\r\n"+body);
-                    if(!routed.StartsWith("HTTP/1.1 202",StringComparison.Ordinal))throw new Exception("POST body was not routed through loopback proxy: "+routed);
+                    string token=server.IssueAccountToken("test");string body="{}";
+                    string routed=Raw(proxy.Port,"POST /api/v1/sessions HTTP/1.1\r\nHost: public-orbit.example\r\nAuthorization: Bearer "+token+"\r\nContent-Type: application/json\r\nContent-Length: "+Encoding.UTF8.GetByteCount(body)+"\r\n\r\n"+body);
+                    if(!routed.StartsWith("HTTP/1.1 200",StringComparison.Ordinal))throw new Exception("authenticated POST body was not routed through loopback proxy: "+routed);
                     if(Raw(proxy.Port,"POST /api/v1/sessions HTTP/1.1\r\nHost: public-orbit.example\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}").Length!=0)throw new Exception("duplicate Content-Length was accepted");
                     if(Raw(proxy.Port,"POST /api/v1/sessions HTTP/1.1\r\nHost: public-orbit.example\r\nTransfer-Encoding: chunked\r\n\r\n").Length!=0)throw new Exception("chunked request was accepted");
                 }

@@ -1,6 +1,6 @@
 # Orbit
 
-Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스크톱 앱입니다. 터미널, 파일 편집기, 작업 폴더, 프롬프트 보관함을 함께 제공하고, 휴대폰·태블릿 등 외부 기기에서도 QR로 페어링해 같은 터미널을 이어서 쓸 수 있습니다.
+Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스크톱 앱입니다. 터미널, 파일 편집기, 작업 폴더, 프롬프트 보관함을 함께 제공하고, 휴대폰·노트북 등 어떤 기기에서든 계정으로 로그인해 같은 터미널을 이어서 쓸 수 있습니다.
 
 호스트는 C# / WinForms, 화면은 WebView2 하나, 터미널은 Windows ConPTY + xterm.js입니다. 백그라운드 색인·감시·상시 실행 런타임 없이 가볍게 동작하도록 설계했습니다.
 
@@ -11,7 +11,7 @@ Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스�
 - **파일 탐색기 · 편집기**: 주요 언어 구문 강조, UTF-8/UTF-16/CP949 인코딩과 LF/CRLF 유지, 외부 변경 충돌 감지.
 - **Markdown 미리보기**: 표·목록·체크리스트·코드 블록 렌더링과 원문 편집 전환.
 - **클릭 가능한 링크**: 터미널에 출력된 파일 경로(`file.js:12:3` 형식 포함)·URL·폴더 경로를 바로 열기.
-- **외부 연결**: QR로 휴대폰·태블릿·다른 PC를 등록해 실행 중인 터미널을 원격으로 조작. Tailscale Funnel 또는 임시 Cloudflare 터널로 공개 HTTPS 주소를 발급합니다. 자세한 내용은 [docs/REMOTE.md](docs/REMOTE.md) 참고.
+- **외부 연결**: 계정으로 로그인하면 휴대폰·노트북 등 어떤 기기·네트워크에서든 실행 중인 터미널을 원격으로 조작. Tailscale Funnel 또는 임시 Cloudflare 터널로 공개 HTTPS 주소를 발급하고, 작은 클라우드 계정 서비스(`cloud/`)가 로그인한 기기를 그 주소로 안내합니다. 자세한 내용은 [docs/REMOTE.md](docs/REMOTE.md) 참고.
 - **다크 / 라이트 테마**, 터미널 글자 크기·출력 보관량 등 개인화 설정.
 
 ## 요구 사항
@@ -21,7 +21,7 @@ Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스�
 - Microsoft Edge WebView2 Runtime
 - Codex 또는 Claude Code CLI가 PATH에 설치되어 있어야 해당 버튼으로 실행할 수 있습니다 ([Codex CLI](https://learn.chatgpt.com/docs/codex/cli), [Claude Code](https://code.claude.com/docs/en/setup)).
 
-앱 자체는 CLI 설치나 계정 로그인을 대신 진행하지 않습니다. 각 CLI의 로그인·승인·작업 과정은 터미널에 그대로 표시됩니다.
+앱 자체는 Codex·Claude CLI 설치나 그 CLI들의 로그인을 대신 진행하지 않습니다. 각 CLI의 로그인·승인·작업 과정은 터미널에 그대로 표시됩니다. (원격 접속용 Orbit 계정은 별개이며, 위 **외부 연결** 참고.)
 
 ## 실행
 
@@ -82,11 +82,13 @@ npm run preview
 | `native/Program.cs` | Windows 창, WebView2, 호스트 메시지 처리 |
 | `native/ConPty.cs` | 실제 터미널(ConPTY), 입출력, 프로세스 수명 관리 |
 | `native/Files.cs` | 텍스트 인코딩, 파일 저장과 외부 변경 감지 |
-| `native/RemoteServer.cs` | 외부 기기 페어링·인증과 원격 API |
+| `native/RemoteServer.cs` | 원격 기기 인증(Bearer 토큰)과 원격 API |
+| `native/RemoteAccount.cs` | 계정 서비스 연결·로그인 지원(계정 토큰 발급·해지) |
 | `native/RemoteTunnel.cs`, `native/RemoteTailscale.cs` | 공개 HTTPS 주소 발급(Cloudflare/Tailscale Funnel) |
 | `src/app.js` | 작업 공간, 탭, 탐색기와 도구 |
 | `src/terminal.js` | xterm.js 연동과 클릭 가능한 링크 |
 | `src/editor.js` | 필요할 때 불러오는 CodeMirror 편집기 |
+| `cloud/` | 계정 로그인용 Cloudflare Worker(신호 서버) — 자세한 내용은 `cloud/wrangler.toml` 참고 |
 | `scripts/build.ps1` | Windows 실행 파일 빌드 |
 
 ## 기술 문서

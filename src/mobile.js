@@ -12,11 +12,10 @@ const specialKeys = { 'ctrl-c':'\u0003', enter:'\r', tab:'\t', escape:'\u001b', 
 const maxInput = 8192;
 let storageBlocked = false;
 function stored(key) { try { return localStorage.getItem(key) || ''; } catch { storageBlocked = true; return ''; } }
-function saveCredentials(nextToken, nextInvite = '') { try { localStorage.setItem('orbit.remote.token', nextToken); if (nextInvite) localStorage.setItem('orbit.remote.pendingInvite', nextInvite); else localStorage.removeItem('orbit.remote.pendingInvite'); return true; } catch { storageBlocked = true; return false; } }
-function forgetCredentials() { try { localStorage.removeItem('orbit.remote.token'); localStorage.removeItem('orbit.remote.pendingInvite'); } catch { storageBlocked = true; } }
+function saveCredentials(nextToken) { try { localStorage.setItem('orbit.remote.token', nextToken); return true; } catch { storageBlocked = true; return false; } }
+function forgetCredentials() { try { localStorage.removeItem('orbit.remote.token'); } catch { storageBlocked = true; } }
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch { storageBlocked = true; } }
 let token = stored('orbit.remote.token');
-let pendingInvite = stored('orbit.remote.pendingInvite');
 let serverEpoch = '', session = '', readySession = '', sessions = [], savedSessions = [], seq = 0;
 let projects = [], project = stored('orbit.remote.project'), currentProject = '';
 let run = 0, pollAbort = null, reconnecting = false, available = true, retryTimer = 0, connectionOpen = false;
@@ -83,7 +82,7 @@ function controls() {
 function sessionName(item) { return item.name || item.title || profiles[item.profile] || '터미널'; }
 function truncateName(text, max = 22) { const value = String(text || ''); return value.length > max ? `${value.slice(0, max - 3).trimEnd()}...` : value; }
 function renderTabs() {
-  $('#session-tabs').replaceChildren(...sessions.map(item => { const button = document.createElement('button'); button.className = `session-tab${item.id === session ? ' active' : ''}`; const full = sessionName(item); button.textContent = truncateName(full); button.title = full; button.onclick = () => selectSession(item.id); return button; }));
+  $('#session-tabs').replaceChildren(...sessions.map(item => { const button = document.createElement('button'); button.className = `session-tab${item.id === session ? ' active' : ''}`; const full = sessionName(item); button.textContent = truncateName(full); button.title = full; button.onclick = () => { selectSession(item.id); closeMenu(); }; return button; }));
   $('#session-select').replaceChildren(...sessions.map(item => { const full = sessionName(item); const option = new Option(truncateName(full), item.id, false, item.id === session); option.title = full; return option; }));
   $('#empty').hidden = !!session; $('#workspace').classList.toggle('is-empty', !session); controls();
   $('#output-title').textContent = session ? truncateName(sessionName(sessions.find(item => item.id === session) || {})) : '현재 터미널';
@@ -245,42 +244,19 @@ async function compose(submit) {
   }
   finally { composerBusy = false; controls(); saveDraft(); }
 }
-function parseInvite(value) {
-  try { value = new URL(value).hash; } catch { /* fragment, raw code, or invalid URL */ }
-  const match = String(value || '').match(/(?:^|[?#&])pair=([^&\s]+)/); const raw = match ? match[1] : String(value || '').trim();
-  try { const [id, code] = decodeURIComponent(raw).split('.'); return id && /^\d{8}$/.test(code || '') ? { id, code } : null; } catch { return null; }
+function parseLoginToken(value) {
+  try { value = new URL(value).hash; } catch { /* fragment or invalid URL */ }
+  const match = String(value || '').match(/(?:^|[?#&])login=([^&\s]+)/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]) || null; } catch { return null; }
 }
-async function completePair(access = token) {
-  if (!access || !pendingInvite) return;
-  const invite=parseInvite(pendingInvite), body=invite||{id:pendingInvite};
-  try { const result = await api('pair/complete', body, true, undefined, access); if (access === token && result.status === 'completed') { pendingInvite = ''; saveCredentials(token); history.replaceState(null, '', location.pathname); } } catch (failure) { if(access===token&&failure.status===403){pendingInvite='';saveCredentials(token);history.replaceState(null,'',location.pathname);} }
-}
-async function pair() {
-  const invite = parseInvite(location.href) || parseInvite($('#code').value);
-  if (!invite) { state('PC에서 만든 QR 연결 링크를 확인하세요.', true); return; }
-  const pairRun = run;
-  $('#connect').disabled = true; state('PC의 승인을 기다리는 중입니다.');
-  try {
-    const claim = await api('pair/request', { ...invite, device:navigator.userAgent.slice(0, 80) }, false);
-    for (let attempt = 0; attempt < 150; attempt++) {
-      await sleep(2000); if (pairRun !== run) return;
-      const result = await api('pair/poll', { ...invite, claim:claim.claim }, false);
-      if (pairRun !== run) return;
-      if (result.status === 'approved') { if (token !== result.token) { invalidateComposeState(); serverEpoch = ''; } token = result.token; pendingInvite = `${invite.id}.${invite.code}`; if (!saveCredentials(token, pendingInvite)) { token = ''; pendingInvite = ''; throw apiError('이 브라우저가 연결 정보를 저장하지 못했습니다. 개인 브라우징을 끄거나 사이트 저장소를 허용한 뒤 QR을 다시 여세요.'); } await completePair(token); if (token) { history.replaceState(null, '', location.pathname); showWorkspace(); } return; }
-      if (result.status === 'rejected') throw apiError('PC에서 연결 요청을 거절했습니다.');
-    }
-    throw apiError('연결 승인이 만료되었습니다. 새 링크를 만드세요.');
-  } catch (failure) {
-    state(failure.status === 403 ? '연결 요청이 거절되었거나 초대가 만료되었습니다.' : (failure.message || '연결할 수 없습니다.'), true);
-  } finally { $('#connect').disabled = false; }
-}
-function showWorkspace() { if (!token) { connectionOpen = false; $('#boot').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = true; $('#pair').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 등록을 유지할 수 없습니다.' : 'PC Orbit에서 QR을 열어 처음 기기를 등록하세요.'); return; } clearTimeout(retryTimer); if (reconnecting) { run++; pollAbort?.abort(); reconnecting = false; } connectionOpen = true; $('#boot').hidden = true; $('#pair').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = false; refresh(true); loadProjects().catch(() => {}); }
+function showWorkspace() { if (!token) { connectionOpen = false; $('#boot').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); return; } clearTimeout(retryTimer); if (reconnecting) { run++; pollAbort?.abort(); reconnecting = false; } connectionOpen = true; $('#boot').hidden = true; $('#login').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = false; refresh(true); loadProjects().catch(() => {}); }
 function disconnect(message = '연결을 일시 중지했습니다.') {
   connectionOpen = false; run++; pollAbort?.abort(); reconnecting = false; clearTimeout(retryTimer); clearTimeout(renderTimer); renderTimer = 0; session = ''; readySession = ''; sessions = []; savedSessions=[]; seq = 0; available = false; composerBusy = false;
-  $('#boot').hidden = true; $('#pair').hidden = true; $('#workspace').hidden = true; $('#reconnect').hidden = false; $('#reconnect p').textContent = message; state(message, true); controls();
+  $('#boot').hidden = true; $('#login').hidden = true; $('#workspace').hidden = true; $('#reconnect').hidden = false; $('#reconnect p').textContent = message; state(message, true); controls();
 }
-function forget(message = 'PC에서 이 브라우저 등록을 해제했습니다.') {
-  disconnect(message); invalidateComposeState(); serverEpoch = ''; token = ''; pendingInvite = ''; forgetCredentials(); $('#reconnect').hidden = true; $('#pair').hidden = false; state(message, true);
+function forget(message = 'PC에서 이 기기의 로그인을 해제했습니다.') {
+  disconnect(message); invalidateComposeState(); serverEpoch = ''; token = ''; forgetCredentials(); $('#reconnect').hidden = true; $('#login').hidden = false; state(message, true);
 }
 
 term.open($('#raw-output'));
@@ -295,15 +271,33 @@ if (advancedKeybar && advancedKeys) {
   advancedKeys.querySelectorAll('button').forEach(button => { button.style.flex = '0 0 auto'; button.style.minHeight = '40px'; });
 }
 applyTheme(); setView(view); updateViewport();
-$('#connect').onclick = pair; $('#send').onclick = () => compose(true); $('#input-only').onclick = () => compose(false); $('#stop').onclick = () => sendInput(session, specialKeys['ctrl-c']); $('#view-toggle').onclick = () => setView(view === 'readable' ? 'raw' : 'readable');
-$('#latest').onclick = () => { $('#readable-output').scrollTop = $('#readable-output').scrollHeight; $('#latest').hidden = true; }; $('#session-select').onchange = event => selectSession(event.target.value); $('#refresh').onclick = showWorkspace; $('#resume').onclick = showWorkspace; $('#logout').onclick = () => disconnect(); $('#input').oninput = saveDraft;
+$('#send').onclick = () => compose(true); $('#input-only').onclick = () => compose(false); $('#stop').onclick = () => sendInput(session, specialKeys['ctrl-c']); $('#view-toggle').onclick = () => setView(view === 'readable' ? 'raw' : 'readable');
+$('#latest').onclick = () => { $('#readable-output').scrollTop = $('#readable-output').scrollHeight; $('#latest').hidden = true; }; $('#session-select').onchange = event => { selectSession(event.target.value); closeMenu(); }; $('#refresh').onclick = showWorkspace; $('#resume').onclick = showWorkspace; $('#logout').onclick = () => disconnect(); $('#input').oninput = saveDraft;
 $('#input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); compose(true); } };
-document.querySelectorAll('[data-key]').forEach(button => { button.onclick = () => sendInput(session, specialKeys[button.dataset.key]); }); document.querySelectorAll('[data-create]').forEach(button => { button.onclick = () => { $('#new-session').open = false; createSession(button.dataset.create); }; });
+document.querySelectorAll('[data-key]').forEach(button => { button.onclick = () => sendInput(session, specialKeys[button.dataset.key]); }); document.querySelectorAll('[data-create]').forEach(button => { button.onclick = () => { $('#new-session').open = false; createSession(button.dataset.create); closeMenu(); }; });
 $('#saved-sessions').ontoggle = () => { if($('#saved-sessions').open && token) loadSavedSessions().catch(failure=>state(failure.message,true)); };
 $('#saved-filter').oninput = renderSaved;
 $('#project-select').onchange = event => { project = event.target.value; savePreference('orbit.remote.project', project); renderSaved(); };
+function closeMenu() { $('#menu-panel').hidden = true; }
+$('#menu-toggle').onclick = () => { $('#menu-panel').hidden = !$('#menu-panel').hidden; };
 $('#theme').onchange = event => { themeChoice = event.target.value; savePreference('orbit.remote.theme', themeChoice); applyTheme(); }; $('#readable-output').onscroll = () => { $('#latest').hidden = atOutputEnd(); };
 visualViewport?.addEventListener('resize', updateViewport); window.addEventListener('resize', updateViewport); matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice === 'system') applyTheme(); });
-const hashInvite = parseInvite(location.href); if(token && hashInvite) { pendingInvite=`${hashInvite.id}.${hashInvite.code}`; if (!saveCredentials(token, pendingInvite)) storageBlocked = true; }
+const hashToken = parseLoginToken(location.href);
+if (hashToken) { if (token !== hashToken) { invalidateComposeState(); serverEpoch = ''; } token = hashToken; if (!saveCredentials(token)) { token = ''; storageBlocked = true; } history.replaceState(null, '', location.pathname); }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { pollAbort?.abort(); clearTimeout(retryTimer); } else refresh(); }); window.addEventListener('online', refresh); window.addEventListener('offline', () => { available = false; controls(); state('오프라인', true); });
-if (token) { showWorkspace(); if (pendingInvite) completePair(token).then(() => { if (!token && hashInvite) pair(); }).catch(() => {}); } else if (hashInvite) { $('#boot').hidden = true; $('#pair').hidden = false; pair(); } else { $('#boot').hidden = true; $('#pair').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 등록을 유지할 수 없습니다.' : 'PC Orbit에서 QR을 열어 처음 기기를 등록하세요.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/mobile-sw.js').catch(() => {});
+if (token) { showWorkspace(); } else { $('#boot').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/mobile-sw.js').catch(() => {});
+
+function initInstallBanner() {
+  const banner = $('#install-banner'), text = $('#install-text'), action = $('#install-action'), dismiss = $('#install-dismiss');
+  if (!banner || stored('orbit.remote.installDismissed')) return;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (standalone) return;
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const hide = () => { banner.hidden = true; savePreference('orbit.remote.installDismissed', '1'); };
+  dismiss.onclick = hide;
+  let deferred = null;
+  window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferred = event; text.textContent = '홈 화면에 추가하면 QR 없이 아이콘으로 바로 열 수 있어요.'; action.hidden = false; banner.hidden = false; });
+  action.onclick = async () => { if (!deferred) return; action.hidden = true; deferred.prompt(); deferred = null; banner.hidden = true; };
+  if (isIOS) { text.textContent = '공유 버튼 → "홈 화면에 추가"를 누르면 아이콘으로 바로 열 수 있어요.'; banner.hidden = false; }
+}
+initInstallBanner();

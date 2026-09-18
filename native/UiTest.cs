@@ -89,8 +89,7 @@ namespace Orbit {
                 await window.ExecuteForTest("document.querySelector('#sidebar-explorer-tab').click();document.documentElement.dataset.theme='light';'light'");
                 await window.CaptureForTest(TestArtifacts.PathFor("sidebar-explorer-light.png"));
                 await window.ExecuteForTest("document.documentElement.dataset.theme='dark';'dark'");
-                await QrUiTest.Run(window);
-                if(Environment.GetEnvironmentVariable("ORBIT_LIVE_FUNNEL_TEST")=="1") await QrUiTest.RunLive(window);
+                await AccountUiTest.Run(window);
                 await Task.Run(()=>RemoteUiTest.Run());
                 await MobileUiTest.Run(window);
                 var normalSize=window.Size;

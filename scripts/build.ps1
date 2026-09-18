@@ -48,7 +48,6 @@ New-Item -ItemType Directory -Force -Path 'release\Orbit\licenses' | Out-Null
 New-Item -ItemType Directory -Force -Path 'release\Orbit\tools' | Out-Null
 Copy-Item -LiteralPath $cloudflared -Destination 'release\Orbit\tools\cloudflared.exe' -Force
 Copy-Item -LiteralPath $cloudflaredLicense -Destination 'release\Orbit\licenses\CLOUDFLARED-LICENSE.txt' -Force
-Copy-Item -LiteralPath 'docs\licenses\qrcode-generator-LICENSE.txt' -Destination 'release\Orbit\licenses\qrcode-generator-LICENSE.txt' -Force
 Copy-Item -LiteralPath "$sdk\LICENSE.txt" -Destination 'release\Orbit\licenses\WebView2-LICENSE.txt' -Force
 Get-ChildItem -LiteralPath 'node_modules' -Recurse -File -Filter 'LICENSE*' | ForEach-Object {
     $relative = $_.FullName.Substring((Join-Path $projectRoot 'node_modules').Length).TrimStart('\') -replace '[\\/]', '_'

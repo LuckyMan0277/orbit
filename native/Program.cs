@@ -38,6 +38,7 @@ namespace Orbit {
         private long savedSessionRequest;
         private long nextSnapshotId;
         private RemoteServer remote;
+        private RemoteAccount account;
         private string configuredRemoteOrigin;
         private readonly RemoteTunnel tunnel=new RemoteTunnel();
         private readonly RemoteTailscale tailscale=new RemoteTailscale();
@@ -56,8 +57,9 @@ namespace Orbit {
             uiTest=args.Contains("--ui-test");remoteTest=args.Contains("--remote-test")||args.Contains("--remote-test-tunnel");remoteTestTunnel=args.Contains("--remote-test-tunnel");remoteTestPort=remoteTest?RemoteTestPort(args):49821;
             dataRoot=remoteTest ? Path.Combine(TestArtifacts.Root,"remote-test-profile") : uiTest ? Path.Combine(TestArtifacts.Root,"webview-profile") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"OrbitAgentDesktop");
             ApplyHostTheme(ReadSavedTheme());
-            remote=new RemoteServer(this,Path.Combine(dataRoot,"remote-devices.json"));remote.TestAutoApprove=remoteTest;remote.Changed+=delegate { Send(new {type="remoteStatus",status=remote.Status()}); };
-            tunnel.Changed+=delegate(string url,string error){RefreshRemoteOrigin();if(!String.IsNullOrEmpty(url)&&remoteTestTunnel)try{File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),remote.Url()+"#pair="+Uri.EscapeDataString(remote.CreateInvite("remote-test-tunnel")));}catch{}Send(new {type="remoteTunnel",tunnel=tunnel.Status(),url=url,error=error});};
+            remote=new RemoteServer(this,Path.Combine(dataRoot,"remote-devices.json"));remote.Changed+=delegate { Send(new {type="remoteStatus",status=remote.Status()}); };
+            account=new RemoteAccount(remote,Path.Combine(dataRoot,"account.json"));account.Changed+=delegate { Send(new {type="remoteAccount",account=account.Status()}); };
+            tunnel.Changed+=delegate(string url,string error){RefreshRemoteOrigin();if(!String.IsNullOrEmpty(url)&&remoteTestTunnel)try{File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),remote.Url()+"#login="+Uri.EscapeDataString(remote.IssueAccountToken("remote-test-tunnel")));}catch{}Send(new {type="remoteTunnel",tunnel=tunnel.Status(),url=url,error=error});};
             tailscale.Changed+=delegate {RefreshRemoteOrigin();Send(new {type="remoteTailscale",tailscale=tailscale.Status()});};
             initialFolder=args.FirstOrDefault(x=>Directory.Exists(x)) ?? ((uiTest||remoteTest) ? TestArtifacts.Root : Environment.CurrentDirectory);
             if(uiTest||remoteTest) Directory.CreateDirectory(initialFolder);
@@ -68,13 +70,13 @@ namespace Orbit {
                     string msg=(dirty?"저장하지 않은 파일 변경 사항이 있습니다.\n":"")+(sessions.Count>0?"실행 중인 터미널과 하위 프로세스가 종료됩니다.\n":"")+"Orbit을 종료할까요?";
                     if(MessageBox.Show(this,msg,"Orbit 종료",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes) {e.Cancel=true;return;}
                 }
-                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();remote.Dispose();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
+                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
             };
         }
         private async Task Initialize() {
             try {
                 Directory.CreateDirectory(dataRoot);
-                if(remoteTest) try { Directory.CreateDirectory(TestArtifacts.Root);string invite=remote.CreateInvite("remote-test"); string url=remote.Start(remoteTestPort)+ "#pair="+Uri.EscapeDataString(invite); File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),url); }catch(Exception ex){Directory.CreateDirectory(TestArtifacts.Root);File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-error.txt"),ex.ToString());throw;}
+                if(remoteTest) try { Directory.CreateDirectory(TestArtifacts.Root);string startUrl=remote.Start(remoteTestPort);string token=remote.IssueAccountToken("remote-test"); string url=startUrl+ "#login="+Uri.EscapeDataString(token); File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),url); }catch(Exception ex){Directory.CreateDirectory(TestArtifacts.Root);File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-error.txt"),ex.ToString());throw;}
                 // Long-idle windows (minimized or occluded) get frozen by Chromium's background
                 // throttling, which stalls xterm's write() callback and, with it, the ConPTY
                 // ack-gated read loop (ConPty.cs ReadLoop). Keep the terminal pumping regardless
@@ -216,12 +218,12 @@ namespace Orbit {
                     case "remoteTailscaleStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
                     case "remoteConnectStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));if(!remote.Url().StartsWith("https:",StringComparison.OrdinalIgnoreCase))await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
                     case "remoteTunnelStop":tunnel.Stop();result=remote.Status();break;
-                    case "remoteInvite":string invite=remote.CreateInvite(S(a,"name","mobile"));result=new {invite=invite,id=invite.Split('.')[0],url=remote.Url()};break;
-                    case "remoteInviteCancel":remote.CancelInvite(S(a,"id"));result=remote.Status();break;
-                    case "remoteApprove":result=new {ok=remote.Approve(S(a,"id"))};break;
-                    case "remoteReject":remote.Reject(S(a,"id"));result=remote.Status();break;
-                    case "remoteRevoke":remote.Revoke(S(a,"id"));result=remote.Status();break;
                     case "remotePublicOrigin":configuredRemoteOrigin=S(a,"url");RefreshRemoteOrigin();result=remote.Status();break;
+                    case "accountStatus":result=account.Status();break;
+                    case "accountServiceUrl":account.ServiceUrl=S(a,"url");result=account.Status();break;
+                    case "accountSignUp":result=await Task.Run(()=>account.SignUp(S(a,"email"),S(a,"password")));break;
+                    case "accountLink":result=await Task.Run(()=>account.Link(S(a,"email"),S(a,"password")));break;
+                    case "accountUnlink":result=await Task.Run(()=>account.Unlink());break;
                     case "remoteTailscaleSetup":OpenTailscaleSetup(S(a,"url"));result=new {ok=true};break;
                     case "remoteDiagnostic":result=await Task.Run(()=>RemoteDiagnostic());break;
                     case "remoteSnapshot": { RemoteSnapshot snapshot; string key=S(a,"request"); if(remoteSnapshots.TryGetValue(key,out snapshot)){snapshot.Data=S(a,"data");snapshot.Seq=L(a,"seq");snapshot.Cols=N(a,"cols");snapshot.Rows=N(a,"rows");try{snapshot.Ready.Set();}catch(ObjectDisposedException){}}break; }
@@ -235,7 +237,7 @@ namespace Orbit {
         private ConPty GetSession(string id) {ConPty value;if(!sessions.TryGetValue(id,out value))throw new InvalidOperationException("종료된 터미널입니다.");return value;}
         private static int RemoteTestPort(string[] args) { string value=args.FirstOrDefault(x=>x.StartsWith("--remote-test-port=",StringComparison.OrdinalIgnoreCase));int port;if(value!=null&&Int32.TryParse(value.Substring("--remote-test-port=".Length),out port)&&port>=1024&&port<=65535)return port;return 49821; }
         private long RecordOutput(string id,string data) { OutputRing ring;if(!outputRings.TryGetValue(id,out ring))return 0;return ring.Advance(data,remote.Enabled); }
-        private void RefreshRemoteOrigin() {var values=json.Deserialize<Dictionary<string,object>>(json.Serialize(tailscale.Status()));string ts=values.ContainsKey("url")?Convert.ToString(values["url"]):null;remote.SetPublicOrigin(!String.IsNullOrEmpty(ts)?ts:(!String.IsNullOrEmpty(tunnel.Url)?tunnel.Url:configuredRemoteOrigin));}
+        private void RefreshRemoteOrigin() {var values=json.Deserialize<Dictionary<string,object>>(json.Serialize(tailscale.Status()));string ts=values.ContainsKey("url")?Convert.ToString(values["url"]):null;remote.SetPublicOrigin(!String.IsNullOrEmpty(ts)?ts:(!String.IsNullOrEmpty(tunnel.Url)?tunnel.Url:configuredRemoteOrigin));if(remote.Enabled&&!String.IsNullOrEmpty(remote.PublicOrigin))account.PushUrl(remote.Url());}
         private object RemoteDiagnostic() {var ts=tailscale.Status();var cf=tunnel.Status();string current=remote.PublicOrigin;bool checkedUrl=false,reachable=false;string error=null;Uri uri;if(Uri.TryCreate(current,UriKind.Absolute,out uri)&&uri.Scheme=="https"){checkedUrl=true;try{var request=(System.Net.HttpWebRequest)System.Net.WebRequest.Create(new Uri(uri.GetLeftPart(UriPartial.Authority)+"/mobile.html"));request.Method="GET";request.Timeout=3000;request.ReadWriteTimeout=3000;request.AllowAutoRedirect=false;using(var response=(System.Net.HttpWebResponse)request.GetResponse())reachable=(int)response.StatusCode>=200&&(int)response.StatusCode<400;}catch(Exception ex){error=ex.Message;}}return new {tailscale=ts,tunnel=cf,checkedUrl=checkedUrl,reachable=reachable,error=error};}
         private static void OpenTailscaleSetup(string value) {Uri uri;if(!Uri.TryCreate(value,UriKind.Absolute,out uri)||uri.Scheme!="https"||!(String.Equals(uri.Host,"tailscale.com",StringComparison.OrdinalIgnoreCase)||uri.Host.EndsWith(".tailscale.com",StringComparison.OrdinalIgnoreCase)))throw new InvalidOperationException("허용되지 않은 Tailscale 주소입니다.");Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});}
         private void ClearRemoteRings() { foreach(var ring in outputRings.Values)ring.Clear(); }

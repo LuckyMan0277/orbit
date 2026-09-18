@@ -42,7 +42,6 @@ namespace Orbit {
             internal int Count(string fragment) { lock(Inputs)return Inputs.FindAll(x=>x.IndexOf(fragment,StringComparison.Ordinal)>=0).Count; }
             internal int CountExact(string data) { lock(Inputs)return Inputs.FindAll(x=>x.EndsWith("|"+data,StringComparison.Ordinal)).Count; }
         }
-        sealed class Response { internal int Status;internal Dictionary<string,object> Value; }
         static readonly JavaScriptSerializer Json=new JavaScriptSerializer();
         internal static async Task Run(MainWindow window) {
             int port=0;
@@ -53,14 +52,8 @@ namespace Orbit {
                 Exception startFailure=null;
                 for(int attempt=0;attempt<5;attempt++) { port=FreePort();try { server.Start(port);startFailure=null;break; } catch(HttpListenerException ex) { startFailure=ex; } }
                 if(startFailure!=null) throw new InvalidOperationException("mobile loopback server could not claim a test port",startFailure);
-                string root="http://127.0.0.1:"+port+"/api/v1/";
-                string[] invite=server.CreateInvite("mobile-ui-test").Split('.');
-                var claim=Post(root,"pair/request",new {id=invite[0],code=invite[1],device="WebView2 mobile test"},null).Value;
-                if(!server.Approve(invite[0])) throw new InvalidOperationException("mobile test pairing approval failed");
-                var poll=Post(root,"pair/poll",new {id=invite[0],code=invite[1],claim=(string)claim["claim"]},null);
-                if(poll.Status!=200) throw new InvalidOperationException("mobile test token setup failed");
-                string token=(string)poll.Value["token"];
-                if(Post(root,"pair/complete",new {id=invite[0]},token).Status!=200) throw new InvalidOperationException("mobile test completion failed");
+                string token=server.IssueAccountToken("mobile-ui-test");
+                if(String.IsNullOrEmpty(token)) throw new InvalidOperationException("mobile test account token setup failed");
 
                 var original=window.Size;var originalMinimum=window.MinimumSize;
                 try {
@@ -77,7 +70,7 @@ namespace Orbit {
                     await window.ExecuteForTest("document.querySelector('#resume').click();'resumed'");
                     await Wait(window,"Boolean(!document.querySelector('#workspace').hidden&&document.querySelectorAll('.session-tab').length===2)",8000,"disconnect reconnects without pairing");
                     window.NavigateForMobileTest("http://127.0.0.1:"+port+"/mobile.html?trusted-revisit=1");
-                    await Wait(window,"Boolean(!document.querySelector('#workspace').hidden&&document.querySelector('#pair').hidden&&document.querySelectorAll('.session-tab').length===2&&localStorage.getItem('orbit.remote.token'))",8000,"trusted same-origin revisit without QR or approval");
+                    await Wait(window,"Boolean(!document.querySelector('#workspace').hidden&&document.querySelector('#login').hidden&&document.querySelectorAll('.session-tab').length===2&&localStorage.getItem('orbit.remote.token'))",8000,"trusted same-origin revisit without a fresh login");
                     await Stage(window,PhoneScript);
                     string readable=Json.Deserialize<string>(await window.ExecuteForTest("document.querySelector('#readable-output').textContent"));
                     File.WriteAllText(TestArtifacts.PathFor("mobile-readable-output.txt"),readable,new UTF8Encoding(false));
@@ -108,15 +101,14 @@ namespace Orbit {
                     if(terminals.Created.Count!=5||new[]{"cmd","powershell","codex","claude","codex/resume"}.Any(profile=>!terminals.Created.Contains(profile))) throw new InvalidOperationException("mobile create controls or saved resume did not select every supported profile");
                     if(terminals.CountExact("SLOW")!=1||terminals.CountExact("CONFIRMED DROP")!=1||terminals.CountExact("\r")<3) throw new InvalidOperationException("mobile controls did not reach expected body and Enter packets");
                     if(terminals.CountExact("DROP")!=1||terminals.CountExact("DROP\r")!=0) throw new InvalidOperationException("dropped response body was repeated or its Enter packet was emitted");
-                    server.TestAutoApprove=true;
-                    string[] replacement=server.CreateInvite("replacement-token-test").Split('.');
+                    string replacementToken=server.IssueAccountToken("replacement-token-test");
+                    if(String.IsNullOrEmpty(replacementToken)) throw new InvalidOperationException("mobile test replacement token setup failed");
                     await window.ExecuteForTest("localStorage.setItem('orbit.remote.token','revoked-token');'replacement token set'");
-                    window.NavigateForMobileTest("http://127.0.0.1:"+port+"/mobile.html?replacement="+replacement[0]+"#pair="+replacement[0]+"."+replacement[1]);
-                    await Wait(window,"location.search.indexOf('replacement="+replacement[0]+"')>=0&&location.hash.indexOf('pair="+replacement[0]+".')>=0&&document.readyState==='complete'",5000,"replacement QR fresh document");
-                    await Wait(window,"Boolean(document.querySelector('#workspace')&&!document.querySelector('#workspace').hidden&&document.querySelectorAll('.session-tab').length>=2&&localStorage.getItem('orbit.remote.token')&&localStorage.getItem('orbit.remote.token')!=='revoked-token')",10000,"replacement QR after revoked token");
-                    string replacementToken=Json.Deserialize<string>(await window.ExecuteForTest("localStorage.getItem('orbit.remote.token')"));
-                    if(String.IsNullOrEmpty(replacementToken)||replacementToken=="revoked-token"||Json.Serialize(server.Completed()).IndexOf(replacement[0],StringComparison.Ordinal)<0) throw new InvalidOperationException("revoked token did not complete replacement QR pairing");
-                    File.WriteAllText(TestArtifacts.PathFor("mobile-report.txt"),"PASS WebView2 mobile page over loopback RemoteServer: authenticated pairing, trusted same-origin revisit without QR or approval, disconnect/reconnect preserving the trusted browser token, revoked-token replacement QR pairing, CMD/PowerShell/Codex/Claude create API, 390x844 phone, 390x430 keyboard, 820x1180 tablet, dark/light captures, wrapping/raw view, drafts, async session switch, special keys, and dropped-response receipt confirmation. No public tunnel was enabled.\r\nInputs: "+terminals.Count("\r"));
+                    window.NavigateForMobileTest("http://127.0.0.1:"+port+"/mobile.html#login="+Uri.EscapeDataString(replacementToken));
+                    await Wait(window,"Boolean(document.querySelector('#workspace')&&!document.querySelector('#workspace').hidden&&document.querySelectorAll('.session-tab').length>=2&&localStorage.getItem('orbit.remote.token')&&localStorage.getItem('orbit.remote.token')!=='revoked-token')",10000,"#login fragment replaces a revoked token");
+                    string confirmedToken=Json.Deserialize<string>(await window.ExecuteForTest("localStorage.getItem('orbit.remote.token')"));
+                    if(String.IsNullOrEmpty(confirmedToken)||confirmedToken=="revoked-token"||confirmedToken!=replacementToken) throw new InvalidOperationException("revoked token was not replaced by the #login fragment");
+                    File.WriteAllText(TestArtifacts.PathFor("mobile-report.txt"),"PASS WebView2 mobile page over loopback RemoteServer: account-token login, trusted same-origin revisit without a fresh login, disconnect/reconnect preserving the trusted browser token, #login fragment replacing a revoked token, CMD/PowerShell/Codex/Claude create API, 390x844 phone, 390x430 keyboard, 820x1180 tablet, dark/light captures, wrapping/raw view, drafts, async session switch, special keys, and dropped-response receipt confirmation. No public tunnel was enabled.\r\nInputs: "+terminals.Count("\r"));
                 } finally { window.MinimumSize=originalMinimum;window.Size=original; }
             }
         }
@@ -127,11 +119,6 @@ namespace Orbit {
             for(int i=0;i<200;i++) { string value=await window.ExecuteForTest("JSON.stringify(window.__orbitMobileTest)");if(value.IndexOf("\\\"done\\\":true",StringComparison.Ordinal)>=0){if(value.IndexOf("\\\"error\\\"",StringComparison.Ordinal)>=0)throw new InvalidOperationException(value);return;}await Task.Delay(50); }
             throw new TimeoutException("Mobile UI stage timed out");
         }
-        static Response Post(string root,string operation,object body,string token) {
-            var request=(HttpWebRequest)WebRequest.Create(root+operation);request.Method="POST";request.ContentType="application/json";if(token!=null)request.Headers[HttpRequestHeader.Authorization]="Bearer "+token;byte[] bytes=Encoding.UTF8.GetBytes(Json.Serialize(body));request.ContentLength=bytes.Length;using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
-            try { using(var response=(HttpWebResponse)request.GetResponse())return Read(response); } catch(WebException ex) { return Read((HttpWebResponse)ex.Response); }
-        }
-        static Response Read(HttpWebResponse response) { using(response)using(var reader=new StreamReader(response.GetResponseStream()))return new Response {Status=(int)response.StatusCode,Value=Json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd())}; }
         static int FreePort() { var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();int port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();return port; }
         const string PhoneScript=@"
 check(innerWidth===390&&innerHeight===844,'phone viewport expected 390x844, got '+innerWidth+'x'+innerHeight);

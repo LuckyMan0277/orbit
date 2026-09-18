@@ -7,8 +7,8 @@ using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace Orbit {
-    // Loopback protocol test. It deliberately uses the HTTP boundary so auth,
-    // origin and one-time pairing cannot accidentally pass through internals.
+    // Loopback protocol test. It deliberately uses the HTTP boundary so auth
+    // and origin checks cannot accidentally pass through internals.
     internal static class RemoteUiTest {
         sealed class Terminals : IRemoteTerminals {
             public int Created,Inputs;
@@ -33,17 +33,11 @@ namespace Orbit {
                 server.Start(port); string baseUrl="http://127.0.0.1:"+port+"/api/v1/";
                 Expect(Post(baseUrl,"sessions",new { }).Status==401,"unauthorized sessions");
                 Expect(Post(baseUrl,"terminals/create",new {profile="cmd"}).Status==401&&terminals.Created==0,"unauthorized create");
-                Expect(Post(baseUrl,"pair/request",new { },null,"https://evil.example").Status==403,"origin rejection");
-                string[] invite=server.CreateInvite("test").Split('.');
-                var request=Post(baseUrl,"pair/request",new {id=invite[0],code=invite[1],device="test phone"});Expect(request.Status==202,"pair request");
-                var claim=(string)request.Value["claim"];Expect(Post(baseUrl,"pair/poll",new {id=invite[0],code=invite[1]}).Status==403,"claim required");
-                Expect(server.Approve(invite[0]),"approve pending");
-                var approved=Post(baseUrl,"pair/poll",new {id=invite[0],code=invite[1],claim=claim});Expect(approved.Status==200,"approved poll");string token=(string)approved.Value["token"];
-                Expect(Post(baseUrl,"pair/complete",new {id=invite[0]},token).Status==200,"authenticated pair completion");
-                Expect(Json.Serialize(server.Status()).Contains(invite[0]),"completed invite is correlated in desktop status");
-                Expect(Post(baseUrl,"pair/poll",new {id=invite[0],code=invite[1],claim=claim}).Status==403,"replay rejected");
+                Expect(Post(baseUrl,"sessions",new { },null,"https://evil.example").Status==403,"origin rejection");
+                string token=server.IssueAccountToken("test");Expect(!String.IsNullOrEmpty(token),"account token issued");
+                Expect(Json.Serialize(server.Status()).Contains("test"),"issued token is listed as a device");
                 Expect(Post(baseUrl,"sessions",new { },token).Status==200,"authorized sessions");
-                server.Stop();using(var restarted=new RemoteServer(terminals,store)){restarted.Start(port);Expect(Post(baseUrl,"sessions",new { },token).Status==200,"trusted token survives new server");string[] revisit=restarted.CreateInvite("trusted revisit").Split('.');Expect(Post(baseUrl,"pair/complete",new {id=revisit[0],code="00000000"},token).Status==403,"trusted revisit wrong secret rejected");Expect(Post(baseUrl,"pair/complete",new {id=revisit[0],code=revisit[1]},token).Status==200,"trusted revisit consumes QR without approval");}server.Start(port);
+                server.Stop();using(var restarted=new RemoteServer(terminals,store)){restarted.Start(port);Expect(Post(baseUrl,"sessions",new { },token).Status==200,"trusted token survives new server restart");}server.Start(port);
                 Expect(Post(baseUrl,"saved-sessions",new { },token).Status==200,"authorized saved sessions");
                 Expect(Post(baseUrl,"terminals/create",new {profile="codex",resumeId="x;calc"},token).Status==400,"resume id validation");
                 Expect(Post(baseUrl,"terminals/create",new {profile="codex",resumeId="11111111-1111-4111-8111-111111111111"},token).Status==200,"authorized saved resume");
@@ -65,12 +59,11 @@ namespace Orbit {
                 Expect(Post(baseUrl,"input/status",new {session="cmd",data="idempotent\r",requestId=requestId,serverEpoch=epoch},token).Status==200,"input receipt confirmation");
                 Expect(Post(baseUrl,"input",new {session="cmd",data="idempotent\r",requestId=(UnixMs()-700000)+"-stale-time",serverEpoch=epoch},token).Status==409,"stale timestamp request rejected");
                 Expect(Post(baseUrl,"input",new {session="other",data="idempotent\r",requestId=requestId,serverEpoch=epoch},token).Status==409,"request id session payload mismatch");
-                string[] secondInvite=server.CreateInvite("second device").Split('.');var secondRequest=Post(baseUrl,"pair/request",new {id=secondInvite[0],code=secondInvite[1],device="second device"});Expect(server.Approve(secondInvite[0]),"approve second device");var secondPoll=Post(baseUrl,"pair/poll",new {id=secondInvite[0],code=secondInvite[1],claim=(string)secondRequest.Value["claim"]});string secondToken=(string)secondPoll.Value["token"];Expect(Post(baseUrl,"pair/complete",new {id=secondInvite[0]},secondToken).Status==200,"complete second device");int secondBefore=terminals.Inputs;Expect(Post(baseUrl,"input",new {session="cmd",data="idempotent\r",requestId=requestId,serverEpoch=epoch},secondToken).Status==200&&terminals.Inputs==secondBefore+1,"same request id is isolated by paired device");
+                string secondToken=server.IssueAccountToken("second device");Expect(!String.IsNullOrEmpty(secondToken),"second account token issued");int secondBefore=terminals.Inputs;Expect(Post(baseUrl,"input",new {session="cmd",data="idempotent\r",requestId=requestId,serverEpoch=epoch},secondToken).Status==200&&terminals.Inputs==secondBefore+1,"same request id is isolated by a different token");
                 Expect(Post(baseUrl,"input",new {session="cmd",data="idempotent\r",requestId=UnixMs()+"-stale",serverEpoch="stale"},token).Status==409,"server epoch mismatch");
-                server.Revoke(Convert.ToBase64String(System.Security.Cryptography.SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(token))));
+                server.RevokeToken(token);
                 Expect(Post(baseUrl,"sessions",new { },token).Status==401,"revoked token");
                 Expect(Post(baseUrl,"terminals/create",new {profile="cmd"},token).Status==401&&terminals.Created==5,"revoked create");
-                string[] rejected=server.CreateInvite("reject").Split('.');var pending=Post(baseUrl,"pair/request",new {id=rejected[0],code=rejected[1],device="reject"});server.Reject(rejected[0]);Expect(Post(baseUrl,"pair/poll",new {id=rejected[0],code=rejected[1],claim=(string)pending.Value["claim"]}).Status==403,"rejected pairing");
                 server.Stop();server.Start(port);Expect(Post(baseUrl,"sessions",new { }).Status==401,"restart");
             }
         }
