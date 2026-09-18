@@ -37,6 +37,16 @@ namespace Orbit {
         [DllImport("kernel32.dll")] internal static extern uint SetThreadExecutionState(uint flags);
         internal const uint ES_CONTINUOUS=0x80000000, ES_SYSTEM_REQUIRED=0x00000001;
         internal static void Check(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+        // Ties a helper child process (Tailscale/cloudflared) to Orbit's own lifetime: Windows
+        // kills every process in the job the moment the job's last handle closes, which happens
+        // automatically even if Orbit is killed abruptly (crash, Task Manager, force-kill) rather
+        // than exiting through FormClosing. Best-effort: returns Zero on failure, caller proceeds unprotected.
+        internal static IntPtr AssignKillOnCloseJob(IntPtr processHandle) {
+            IntPtr job=CreateJobObject(IntPtr.Zero,null); if(job==IntPtr.Zero) return IntPtr.Zero;
+            var limit=new EXTENDED_LIMIT(); limit.basic.flags=0x2000;
+            if(!SetInformationJobObject(job,9,ref limit,Marshal.SizeOf(limit))||!AssignProcessToJobObject(job,processHandle)) { CloseHandle(job); return IntPtr.Zero; }
+            return job;
+        }
     }
 
     internal sealed class ConPty : IDisposable {
