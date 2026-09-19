@@ -11,7 +11,7 @@ const projectName = path => state.settings.projectNames?.[projectKey(path)] || b
 const app = $('#app');
 app.innerHTML = `
   <section class="home-screen" id="home-screen" aria-label="Orbit 홈">
-    <header class="home-header"><div class="home-brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><span>orbit</span></div><div class="home-header-actions"><button id="home-pick-folder" class="home-open-folder">프로젝트 추가</button><div class="window-controls home-window-controls" aria-label="창 제어"><button id="home-window-minimize" title="최소화" aria-label="최소화"></button><button id="home-window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="home-window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
+    <header class="home-header"><div class="home-brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><span>orbit</span></div><div class="home-header-actions"><button class="external-connection update-available" data-update hidden></button><button id="home-pick-folder" class="home-open-folder">프로젝트 추가</button><div class="window-controls home-window-controls" aria-label="창 제어"><button id="home-window-minimize" title="최소화" aria-label="최소화"></button><button id="home-window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="home-window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
     <main class="home-stage"><section class="home-orbit-system" id="home-orbit" aria-label="최근 프로젝트"></section><div class="home-recent-note"><small>프로젝트 점을 선택해 작업 공간을 엽니다.</small></div></main>
   </section>
   <aside class="sidebar">
@@ -23,7 +23,7 @@ app.innerHTML = `
     <div class="sidebar-bottom"><div class="side-heading"><span>빠른 도구</span><span class="tiny">WORKFLOW</span></div><div id="quick-tools"></div><div class="resource-card" id="resource-card"><span id="resource-leaf"></span><div><strong id="power-label">가볍게 실행 중</strong><small id="power-detail">절약 모드 · 스크롤 기록 500줄</small></div><span class="status-dot"></span></div><button id="preferences" class="settings-button"><span id="settings-icon"></span>설정 및 사용량<span>⌘</span></button></div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="breadcrumb"><button id="home-return" class="home-return" title="Home" aria-label="Return to Home">orbit</button><button id="sidebar-toggle" class="icon-button" title="사이드바 토글 (Ctrl+B)" aria-label="사이드바 토글"></button><span id="breadcrumb-folder">workspace</span><span class="slash">/</span><span>작업 공간</span><span class="terminal-mini">터미널 <span id="session-count">0</span></span></div><div class="topbar-right"><button id="update-available" class="external-connection update-available" hidden></button><button id="external-connection" class="external-connection" aria-label="기기 연결" title="기기 연결 · 계정 로그인"><span id="external-icon"></span><span>외부 연결</span><small id="external-state">꺼짐</small></button><div class="toolbar-actions" id="workspace-actions"></div><button class="command-trigger" id="command-button">명령 찾기 <kbd>Ctrl K</kbd></button><div class="window-controls" aria-label="창 제어"><button id="window-minimize" title="최소화" aria-label="최소화"></button><button id="window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
+    <header class="topbar"><div class="breadcrumb"><button id="home-return" class="home-return" title="Home" aria-label="Return to Home">orbit</button><button id="sidebar-toggle" class="icon-button" title="사이드바 토글 (Ctrl+B)" aria-label="사이드바 토글"></button><span id="breadcrumb-folder">workspace</span><span class="slash">/</span><span>작업 공간</span><span class="terminal-mini">터미널 <span id="session-count">0</span></span></div><div class="topbar-right"><button class="external-connection update-available" data-update hidden></button><button id="external-connection" class="external-connection" aria-label="기기 연결" title="기기 연결 · 계정 로그인"><span id="external-icon"></span><span>외부 연결</span><small id="external-state">꺼짐</small></button><div class="toolbar-actions" id="workspace-actions"></div><button class="command-trigger" id="command-button">명령 찾기 <kbd>Ctrl K</kbd></button><div class="window-controls" aria-label="창 제어"><button id="window-minimize" title="최소화" aria-label="최소화"></button><button id="window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
     <div class="work-area" id="work-area">
       <section class="terminal-section" id="terminal-section">
         <div id="welcome" class="welcome">
@@ -566,9 +566,10 @@ function applyTheme() {
 function checkForUpdate(){
   call('updateCheck').then(result=>{
     if(!result||!result.available)return;
-    const badge=$('#update-available');
-    badge.textContent='업데이트 v'+result.version;badge.title='현재 v'+result.current+' → 새 버전 v'+result.version;badge.hidden=false;
-    badge.onclick=guard(()=>installUpdate(result));
+    for(const badge of document.querySelectorAll('[data-update]')){
+      badge.textContent='업데이트 v'+result.version;badge.title='현재 v'+result.current+' → 새 버전 v'+result.version;badge.hidden=false;
+      badge.onclick=guard(()=>installUpdate(result));
+    }
   }).catch(()=>{});
 }
 async function installUpdate(result){

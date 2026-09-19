@@ -219,7 +219,7 @@ namespace Orbit {
                     case "remoteConnectStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));if(!remote.Url().StartsWith("https:",StringComparison.OrdinalIgnoreCase))await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
                     case "remoteTunnelStop":tunnel.Stop();result=remote.Status();break;
                     case "remotePublicOrigin":configuredRemoteOrigin=S(a,"url");RefreshRemoteOrigin();result=remote.Status();break;
-                    case "updateCheck":result=await Task.Run(()=>Updater.Check());break;
+                    case "updateCheck": {var check=await Task.Run(()=>Updater.Check());try{File.WriteAllText(Path.Combine(dataRoot,"update-check.log"),DateTime.Now.ToString("s")+" "+json.Serialize(check)+Environment.NewLine);}catch{}result=check;break;}
                     case "updateInstall":await Task.Run(()=>Updater.DownloadAndLaunch());result=new {ok=true};quitting=true;BeginInvoke(new Action(Close));break;
                     case "accountStatus":result=account.Status();break;
                     case "accountServiceUrl":account.ServiceUrl=S(a,"url");result=account.Status();break;
