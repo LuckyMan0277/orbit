@@ -16,7 +16,10 @@ namespace Orbit {
   readonly object gate=new object(); readonly RemoteServer remote; readonly string stateFile; readonly JavaScriptSerializer json=new JavaScriptSerializer();
   string email,deviceToken,pushSecret,lastError; int generation;
   public event Action Changed;
-  public string ServiceUrl{get;set;}
+  string serviceUrl;
+  // Paths are appended as "/login" etc., so a trailing slash or a missing scheme
+  // would turn every request into a 404 "not_found" from the account service.
+  public string ServiceUrl{get{return serviceUrl;}set{string v=(value??"").Trim().TrimEnd('/');if(v.Length>0&&v.IndexOf("://",StringComparison.Ordinal)<0)v="https://"+v;serviceUrl=v;}}
   public RemoteAccount(RemoteServer server,string storage){remote=server;stateFile=storage;Load();}
   public object Status(){lock(gate)return new {linked=!String.IsNullOrEmpty(email),email=email,serviceUrl=ServiceUrl,error=lastError};}
   public object SignUp(string emailValue,string password){return Attach("/signup",emailValue,password);}
