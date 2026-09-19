@@ -597,20 +597,19 @@ function showLoginScreen(){
   const controls=el('div','window-controls home-window-controls');
   for(const [name,label,method] of [['minimize','최소화','windowMinimize'],['maximize','최대화 또는 복원','windowMaximize'],['close','닫기','windowClose']]){const b=el('button',name==='close'?'window-close':'',''); b.type='button';b.title=label;b.setAttribute('aria-label',label);b.append(icon(name));b.onclick=()=>notify(method);controls.append(b);}
   header.append(brand,controls);
-  const form=el('form','client-login-form'),url=el('input','dialog-input'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','client-login-error'),hide=document.createElement('input'),hideLabel=el('label','client-login-hide');
-  url.placeholder='계정 서비스 주소 (https://…)';url.value=state.settings.remoteClientUrl||DEFAULT_ACCOUNT_SERVICE;url.autocomplete='off';
+  const form=el('form','client-login-form'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','client-login-error'),hide=document.createElement('input'),hideLabel=el('label','client-login-hide');
   email.type='email';email.placeholder='이메일';email.autocomplete='username';email.value=state.settings.remoteClientEmail||'';
   password.type='password';password.placeholder='비밀번호';password.autocomplete='current-password';
   hide.type='checkbox';hideLabel.append(hide,document.createTextNode(' 시작할 때 이 화면을 표시하지 않기'));
   const login=el('button','primary','로그인'),skip=el('button','secondary','이 PC만 사용');login.type='submit';skip.type='button';
   error.setAttribute('role','alert');
-  form.append(el('h1','','Orbit 로그인'),el('p','client-login-note','계정에 연결된 PC의 프로젝트를 이 PC에서 엽니다. 이 PC는 접속받는 PC로 등록되지 않고 Tailscale도 필요 없습니다.'),email,password,url,error,login,skip,hideLabel);
+  form.append(el('h1','','Orbit 로그인'),el('p','client-login-note','계정에 연결된 PC의 프로젝트를 이 PC에서 엽니다. 이 PC는 접속받는 PC로 등록되지 않고 Tailscale도 필요 없습니다.'),email,password,error,login,skip,hideLabel);
   let busy=false;
   form.onsubmit=async event=>{
     event.preventDefault();if(busy)return;busy=true;login.disabled=true;login.textContent='로그인 중…';error.textContent='';
     try{
-      const result=await call('remoteClientLogin',{url:url.value.trim(),email:email.value.trim(),password:password.value});
-      state.settings.remoteClientUrl=url.value.trim();state.settings.remoteClientEmail=email.value.trim();persist();
+      const result=await call('remoteClientLogin',{url:state.settings.remoteClientUrl||DEFAULT_ACCOUNT_SERVICE,email:email.value.trim(),password:password.value});
+      state.settings.remoteClientEmail=email.value.trim();persist();
       password.value='';shell.remove();enterClientMode(result,email.value.trim());
     }catch(e){error.textContent=e.message||'로그인하지 못했습니다.';}
     finally{busy=false;login.disabled=false;login.textContent='로그인';}
