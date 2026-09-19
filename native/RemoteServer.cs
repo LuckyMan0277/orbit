@@ -23,7 +23,9 @@ namespace Orbit {
   public string Start(int port){lock(lifecycle){if(running)return Url();Port=port;listener=new HttpListener();listener.Prefixes.Add("http://127.0.0.1:"+port+"/");listener.Start();running=true;BeginAccept();}Raise();return Url();}
   public void Stop(){lock(lifecycle){if(!running)return;running=false;try{listener.Stop();listener.Close();}catch{}}Raise();}
   public void SetPublicOrigin(string value){Uri u;PublicOrigin=Uri.TryCreate(value,UriKind.Absolute,out u)&&u.Scheme=="https"?u.GetLeftPart(UriPartial.Authority):null;Raise();}
-  public string Url(){return (PublicOrigin??("http://127.0.0.1:"+Port))+"/mobile.html";}
+  public string Url(){return OriginUrl()+"/mobile.html";}
+  // What the account service must store: clients append /mobile.html and /api/v1/... themselves.
+  public string OriginUrl(){return PublicOrigin??("http://127.0.0.1:"+Port);}
   public object Status(){return new {enabled=running,url=running?Url():null,devices=Devices()};}
   public object Devices(){return devices.Values.OrderByDescending(x=>x.Added).Select(x=>new {id=x.Hash,name=x.Name,added=x.Added.ToString("o")}).ToArray();}
   // Issues a fresh bearer token for an account-login-based client and registers it exactly like a

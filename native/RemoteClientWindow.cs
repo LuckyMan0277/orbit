@@ -87,7 +87,8 @@ namespace Orbit {
    if(body!=null){body.TryGetValue("url",out hostValue);body.TryGetValue("deviceToken",out tokenValue);}
    string host=Convert.ToString(hostValue),token=Convert.ToString(tokenValue);Uri hostUri;
    if(String.IsNullOrEmpty(token)||!Uri.TryCreate(host,UriKind.Absolute,out hostUri)||hostUri.Scheme!=Uri.UriSchemeHttps)throw new InvalidOperationException("계정 서비스 응답이 올바르지 않습니다.");
-   return new Session{Base=hostUri.GetLeftPart(UriPartial.Authority)+hostUri.AbsolutePath.TrimEnd('/'),Token=token};
+   string path=System.Text.RegularExpressions.Regex.Replace(hostUri.AbsolutePath.TrimEnd('/'),@"/mobile\.html$","",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+   return new Session{Base=hostUri.GetLeftPart(UriPartial.Authority)+path.TrimEnd('/'),Token=token};
   }
   static string LoginError(string code) {
    switch(code) {

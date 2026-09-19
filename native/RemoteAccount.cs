@@ -31,7 +31,7 @@ namespace Orbit {
    if(String.IsNullOrEmpty(baseUrl))return Failure("계정 서비스 주소가 설정되지 않았습니다.");
    string token=remote.IssueAccountToken();
    if(token==null)return Failure("기기 등록 정보를 저장하지 못했습니다.");
-   var body=new Dictionary<string,object>{{"email",emailValue},{"password",password},{"url",remote.Url()},{"deviceToken",token}};
+   var body=new Dictionary<string,object>{{"email",emailValue},{"password",password},{"url",remote.OriginUrl()},{"deviceToken",token}};
    string error;var response=Post(baseUrl+path,body,out error);
    if(response==null){remote.RevokeToken(token);return Failure(error??"계정 서비스에 연결하지 못했습니다.");}
    object errorValue;
