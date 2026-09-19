@@ -82,3 +82,6 @@ dialog{width:510px;max-width:calc(100vw - 40px);max-height:calc(100vh - 70px);bo
 .client-login-note{margin:0 0 6px;color:#b9b3c9;font-size:12px;line-height:1.55}.client-login-form .dialog-input{margin:0}.client-login-form button{height:40px}
 .client-login-error{min-height:16px;margin:0;color:#ffb4c0;font-size:12px;line-height:1.4;white-space:pre-wrap}.client-login-hide{display:flex;align-items:center;gap:6px;color:#9f99b0;font-size:11px}
 [data-theme=light] .client-login{color:#2b2440;background:radial-gradient(circle at 50% 48%,#efe6ff 0,#f6f2fc 36%,#fdfbff 72%)}[data-theme=light] .client-login-note,[data-theme=light] .client-login-hide{color:#6c6575}[data-theme=light] .client-login-error{color:#b3263e}
+
+/* Attached (host) terminals keep the host terminal size, so scroll instead of refitting. */
+.terminal-pane.attached{overflow:auto}

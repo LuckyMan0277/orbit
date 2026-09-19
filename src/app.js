@@ -434,8 +434,9 @@ function setupDrop(node,group,forceCenter=false) { node.ondragover=e=>{if(!e.dat
 function makeSplitter(tree) { const splitter=el('div',`terminal-splitter ${tree.direction}`);splitter.dataset.splitId=tree.id;splitter.tabIndex=0;splitter.setAttribute('role','separator');splitter.setAttribute('aria-orientation',tree.direction==='row'?'vertical':'horizontal');const adjust=delta=>{tree.ratio=Math.max(.18,Math.min(.82,tree.ratio+delta));renderTerminals();};splitter.onpointerdown=e=>{splitter.setPointerCapture(e.pointerId);const start=tree.ratio,box=splitter.parentElement.getBoundingClientRect(),axis=tree.direction==='row'?box.width:box.height,origin=tree.direction==='row'?e.clientX:e.clientY;const move=m=>{tree.ratio=Math.max(.18,Math.min(.82,start+((tree.direction==='row'?m.clientX:m.clientY)-origin)/axis));splitter.parentElement.style.setProperty('--split-first',`${tree.ratio*100}%`);};splitter.onpointermove=move;splitter.onpointerup=()=>{splitter.onpointermove=null;renderTerminals();};};splitter.onkeydown=e=>{if(['ArrowLeft','ArrowUp'].includes(e.key)){e.preventDefault();adjust(-.04);}if(['ArrowRight','ArrowDown'].includes(e.key)){e.preventDefault();adjust(.04);}};return splitter; }
 function renderTerminals() { const has=state.terminals.length>0,layout=$('#terminal-layout');$('#welcome').hidden=has;layout.hidden=!has;layout.replaceChildren();if(has)layout.append(renderNode(state.terminalRoot));$('#session-count').textContent=state.terminals.length;$('#status-sessions').textContent=`${state.terminals.filter(t=>!t.pane.exited).length}개 실행 중`;requestAnimationFrame(()=>{const t=activeTerminal();if(t)t.pane.focus();});renderSavedSessions(); }
 async function closeTerminal(t) {
-  if (!t.pane.exited && !await confirm('터미널 종료', `${t.name}과 연결된 에이전트 및 하위 프로세스를 종료합니다.`, '종료')) return;
-  await call('closeTerminal', { session: t.id });removeTab(t.id);t.pane.dispose();state.terminals = state.terminals.filter(x => x !== t);renderTerminals();
+  if (!t.pane.exited && !t.pane.attached && !await confirm('터미널 종료', `${t.name}과 연결된 에이전트 및 하위 프로세스를 종료합니다.`, '종료')) return;
+  if (t.pane.attached) (state.dismissedHost ||= new Set()).add(t.id); // do not re-attach a tab the user closed
+  await call(t.pane.attached ? 'detachTerminal' : 'closeTerminal', { session: t.id }).catch(e => { if (!t.pane.attached) throw e; });removeTab(t.id);t.pane.dispose();state.terminals = state.terminals.filter(x => x !== t);renderTerminals();
 }
 async function renameTerminal(t) { const input = el('input','dialog-input');input.value = t.name; const answer = await dialog('터미널 이름', node => node.append(input), [{value:'cancel',label:'취소'},{value:'save',label:'변경',primary:true}]);if(answer==='save' && input.value.trim()){t.name=input.value.trim().slice(0,40);t.pane.name=t.name;notify('terminalName',{session:t.id,name:t.name});renderTerminals();} }
 async function toggleSplit() { const group=activeGroup(),id=group.active;if(!id||group.tabs.length<2){toast('같은 그룹에 터미널 탭이 2개 이상 있어야 분할할 수 있습니다.');return;}splitGroup(group,id,'right');renderTerminals(); }
@@ -632,7 +633,34 @@ function enterClientMode(result,emailValue){
   const projects=(Array.isArray(result?.projects)?result.projects:[]).filter(item=>item&&typeof item.path==='string');
   state.client={email:emailValue,projects,names:Object.fromEntries(projects.map(item=>[item.path,typeof item.name==='string'&&item.name?item.name:basename(item.path)]))};
   document.body.classList.add('client-mode');showHome();
+  syncHostTerminals();clearInterval(state.hostSync);state.hostSync=setInterval(syncHostTerminals,6000);
 }
+// The terminals open in the host's Orbit show up here as tabs. This PC only views and types into them; their size and
+// lifetime stay with the host, so closing such a tab detaches instead of terminating the host's agent.
+async function attachHostTerminal(info){
+  const snapshot=await call('attachTerminal',{session:info.id});
+  const { TerminalPane } = await import('./terminal.js');
+  const profile=profiles[info.profile]?info.profile:'powershell',name=info.name||profiles[profile].name;
+  const pane=new TerminalPane({ id:info.id, profile, cwd:state.folder, name, settings:state.settings, openLink:guard(openLink), onExit:renderTerminals, onFocus:()=>activateTerminal(info.id), attach:snapshot });
+  const session={ id:info.id, profile, resumeId:'', name, pane, createdAt:Date.now() };
+  state.terminals.push(session); addToGroup(activeGroup(),info.id); if(!state.active)state.active=info.id; renderTerminals();
+  await pane.start();
+}
+let hostSyncBusy=false;
+async function syncHostTerminals(){
+  if(!state.client||hostSyncBusy)return;
+  hostSyncBusy=true;
+  try{
+    const list=(await call('hostSessions')).sessions||[];
+    const known=new Set(state.terminals.map(t=>t.id));
+    for(const info of list){ if(known.has(info.id)||state.dismissedHost?.has(info.id))continue; try{ await attachHostTerminal(info); }catch(e){ toast(e.message,true); } }
+  }catch{ /* host busy or offline: the next tick retries */ }
+  finally{ hostSyncBusy=false; }
+}
+on('viewerDropped',data=>{
+  const t=state.terminals.find(x=>x.id===data.session);
+  if(t){ removeTab(t.id); t.pane.dispose(); state.terminals=state.terminals.filter(x=>x!==t); renderTerminals(); toast('출력을 따라가지 못해 터미널 연결을 다시 맺습니다.'); }
+});
 async function leaveClientMode(){
   // Re-read the saved settings: the in-memory copy picked up the host's project paths during the session.
   try{const saved=(await call('init')).settings||{};saved.remoteClientAuto=false;await call('settings',saved);}catch{}

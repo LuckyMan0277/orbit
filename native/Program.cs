@@ -154,7 +154,7 @@ namespace Orbit {
             if(owner==null&&clientSession!=null) { if(method=="ack")return null; if(DeskForward.Contains(method))return await DeskForwardCall(method,a); }
             if(owner!=null) {
                 if(method=="ack")return null; // remote output is drained by the host itself, see DeskAfterOutput
-                if(method=="write"||method=="resize"||method=="closeTerminal"||method=="terminalName") { string own;if(!sessionOwners.TryGetValue(S(a,"session"),out own)||own!=owner)throw new InvalidOperationException("이 원격 클라이언트의 터미널이 아닙니다."); }
+                if(method=="write"||method=="resize"||method=="closeTerminal"||method=="terminalName") { string key=S(a,"session"),own;bool mine=sessionOwners.TryGetValue(key,out own)&&own==owner;bool watching=method=="write"&&!sessionOwners.ContainsKey(key)&&IsViewer(key,owner);if(!mine&&!watching)throw new InvalidOperationException("이 원격 클라이언트의 터미널이 아닙니다."); }
             }
             switch(method) {
                 case "init": result=new { folder=initialFolder,version=Updater.CurrentText(),settings=LoadSettings(),testMode=uiTest||remoteTest };break;
@@ -210,7 +210,7 @@ namespace Orbit {
                     }
                     outputRings[sid]=new OutputRing();if(owner!=null)sessionOwners[sid]=owner;
                     var terminal=new ConPty(sid,cwd,command,N(a,"cols",100),N(a,"rows",30),(key,chunk)=>{long seq=RecordOutput(key,chunk);EmitOutput(key,new {type="output",session=key,data=chunk,seq=seq},chunk.Length);},(key,code)=> {
-                        if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { string exitOwner;sessionOwners.TryRemove(key,out exitOwner);ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();EmitTo(exitOwner,new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
+                        if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { string exitOwner;sessionOwners.TryRemove(key,out exitOwner);ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();EmitExit(key,exitOwner,new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
                     });
                     if(!sessions.TryAdd(sid,terminal))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");sessionProfiles[sid]=profile;if(!String.IsNullOrEmpty(resumeId))sessionResumeIds[sid]=profile+":"+resumeId;sessionNames[sid]=TerminalName(S(a,"name"),profile);terminal.Start();result=new {pid=terminal.ProcessId};
                     } finally { pendingTerminals.Remove(sid);if(!sessions.ContainsKey(sid)){string failedOwner;sessionOwners.TryRemove(sid,out failedOwner);} }
@@ -271,6 +271,21 @@ namespace Orbit {
                 case "remoteSnapshot": { RemoteSnapshot snapshot; string key=S(a,"request"); if(remoteSnapshots.TryGetValue(key,out snapshot)){snapshot.Data=S(a,"data");snapshot.Seq=L(a,"seq");snapshot.Cols=N(a,"cols");snapshot.Rows=N(a,"rows");try{snapshot.Ready.Set();}catch(ObjectDisposedException){}}break; }
                 case "remoteCreate": { RemoteCreate creationRequest;string key=S(a,"request");if(remoteCreates.TryGetValue(key,out creationRequest)){creationRequest.Session=S(a,"session");creationRequest.Error=S(a,"error");try{creationRequest.Ready.Set();}catch(ObjectDisposedException){}}break; }
                 case "remoteProjects": { RemoteProjects projectsRequest;string key=S(a,"request");if(remoteProjectsRequests.TryGetValue(key,out projectsRequest)){projectsRequest.List=a.ContainsKey("projects")?a["projects"]:new object[0];projectsRequest.Current=S(a,"current");try{projectsRequest.Ready.Set();}catch(ObjectDisposedException){}}break; }
+                case "hostSessions": {
+                    // The terminals open in the host's own Orbit window (not the ones remote clients created).
+                    var host=sessions.Values.Where(x=>!sessionOwners.ContainsKey(x.Id)).Select(x=>{string profile,name;if(!sessionProfiles.TryGetValue(x.Id,out profile))profile="powershell";if(!sessionNames.TryGetValue(x.Id,out name))name=profile;return new {id=x.Id,name=name,profile=profile};}).ToArray();
+                    result=new {sessions=host};break;
+                }
+                case "attachTerminal": {
+                    string key=S(a,"session");
+                    if(owner==null||!sessions.ContainsKey(key)||sessionOwners.ContainsKey(key))throw new InvalidOperationException("호스트에서 열린 터미널이 아닙니다.");
+                    // Register before the snapshot so no output is missed; the client drops anything at or below the snapshot's seq.
+                    sessionViewers.GetOrAdd(key,_=>new ConcurrentDictionary<string,bool>())[owner]=true;
+                    try { result=await Task.Run(()=>((IRemoteTerminals)this).Snapshot(key)); }
+                    catch { ConcurrentDictionary<string,bool> v;bool gone;if(sessionViewers.TryGetValue(key,out v))v.TryRemove(owner,out gone);throw; }
+                    break;
+                }
+                case "detachTerminal": { ConcurrentDictionary<string,bool> v;bool gone;if(owner!=null&&sessionViewers.TryGetValue(S(a,"session"),out v))v.TryRemove(owner,out gone);break; }
                 default:throw new InvalidOperationException("지원하지 않는 요청입니다.");
             }
             return result;

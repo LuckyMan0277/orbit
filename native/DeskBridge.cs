@@ -31,9 +31,13 @@ namespace Orbit {
         // remote-connection settings of this PC are not reachable from a remote client.
         static readonly HashSet<string> DeskAllowed=new HashSet<string> {
             "list","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","ack","resize",
-            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics" };
+            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal" };
         readonly ConcurrentDictionary<string,DeskClient> deskClients=new ConcurrentDictionary<string,DeskClient>();
         readonly ConcurrentDictionary<string,string> sessionOwners=new ConcurrentDictionary<string,string>();
+        // Remote clients watching a terminal that the host itself opened (session id -> client ids).
+        readonly ConcurrentDictionary<string,ConcurrentDictionary<string,bool>> sessionViewers=new ConcurrentDictionary<string,ConcurrentDictionary<string,bool>>();
+        const int DeskViewerLimit=4*1024*1024;
+        bool IsViewer(string key,string client){ConcurrentDictionary<string,bool> v;return sessionViewers.TryGetValue(key,out v)&&v.ContainsKey(client);}
         System.Windows.Forms.Timer deskSweep;
 
         object IDeskBridge.DeskCall(string client,string method,Dictionary<string,object> args) {
@@ -84,6 +88,7 @@ namespace Orbit {
                     try { await Dispatch("closeTerminal",new Dictionary<string,object>{{"session",owned}},pair.Key); } catch { }
                     string ignored;sessionOwners.TryRemove(owned,out ignored);
                 }
+                foreach(var viewers in sessionViewers.Values){bool gone;viewers.TryRemove(pair.Key,out gone);}
                 DeskClient removed;deskClients.TryRemove(pair.Key,out removed);
             }
             if(deskClients.IsEmpty&&deskSweep!=null) { deskSweep.Stop();deskSweep.Dispose();deskSweep=null; }
@@ -99,17 +104,40 @@ namespace Orbit {
         // host acknowledges on its behalf until too much is waiting to be fetched, then resumes when the client catches up.
         private void EmitOutput(string key,object message,int size) {
             string owner;
-            if(!sessionOwners.TryGetValue(key,out owner)) { Send(message);return; }
+            if(!sessionOwners.TryGetValue(key,out owner)) {
+                Send(message);
+                ConcurrentDictionary<string,bool> viewers;
+                if(sessionViewers.TryGetValue(key,out viewers))foreach(string id in viewers.Keys)EmitToViewer(id,key,message,size);
+                return;
+            }
             EmitTo(owner,message,size);
             DeskClient c;bool pause=false;
             if(deskClients.TryGetValue(owner,out c))lock(c.Gate) { pause=c.Pending>DeskPendingLimit;if(pause)c.Paused.Add(key); }
             if(!pause) { ConPty t;if(sessions.TryGetValue(key,out t))t.Acknowledge(); }
         }
 
+        // Viewers do not take part in the host's acknowledgements (the host UI still acks). A viewer that falls too far
+        // behind is dropped and told to re-attach, which starts from a fresh snapshot instead of an unbounded backlog.
+        private void EmitToViewer(string clientId,string key,object message,int size) {
+            DeskClient c;if(!deskClients.TryGetValue(clientId,out c))return;
+            bool behind;lock(c.Gate)behind=c.Pending>DeskViewerLimit;
+            if(behind) {
+                ConcurrentDictionary<string,bool> viewers;bool gone;
+                if(sessionViewers.TryGetValue(key,out viewers))viewers.TryRemove(clientId,out gone);
+                EmitTo(clientId,new { type="viewerDropped",session=key });return;
+            }
+            EmitTo(clientId,message,size);
+        }
+        private void EmitExit(string key,string owner,object message) {
+            EmitTo(owner,message);
+            ConcurrentDictionary<string,bool> viewers;
+            if(owner==null&&sessionViewers.TryRemove(key,out viewers))foreach(string id in viewers.Keys)EmitTo(id,message);
+        }
+
         // ---------------------------------------------------------------- client side
         static readonly HashSet<string> DeskForward=new HashSet<string> {
             "list","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","resize",
-            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics" };
+            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal" };
         // Terminal input must reach the host in the order it was typed; file calls may overlap.
         static readonly HashSet<string> DeskOrdered=new HashSet<string> { "createTerminal","write","resize","closeTerminal","terminalName" };
         readonly object deskLaneLock=new object();
