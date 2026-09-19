@@ -29,6 +29,8 @@ Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스�
 
 Orbit은 실행할 때마다 GitHub에서 새 버전이 있는지 확인합니다(백그라운드 상시 확인은 없음). 새 버전이 있으면 상단에 **업데이트 vX.Y.Z** 버튼이 나타나고, 누르면 확인 후 설치 파일을 내려받아 Orbit을 종료 → 설치 → 자동 재실행합니다. 실행 중인 터미널은 종료되므로 작업이 끝난 뒤에 누르세요.
 
+**알려진 제한**: 릴리스에는 아직 코드 서명이 없습니다. Windows의 스마트 앱 컨트롤이 켜진 PC에서는 설치 파일과 앱 내 업데이트 실행이 차단될 수 있습니다. 서명 적용 계획은 [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)를 참고하세요.
+
 새 버전 배포: `v0.2.0` 같은 태그를 push하면 GitHub Actions가 빌드해 릴리스에 `Orbit-Setup.exe`를 올립니다(`git tag v0.2.0 && git push origin v0.2.0`). main에 push할 때는 빌드만 검증하고 릴리스는 만들지 않습니다.
 
 ## 실행
