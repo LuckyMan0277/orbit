@@ -1,4 +1,6 @@
-const ITERATIONS = 210000;
+// Cloudflare Workers reject PBKDF2 iteration counts above 100000 in production
+// (local workerd does not enforce this, so tests cannot catch it).
+const ITERATIONS = 100000;
 const HASH = 'SHA-256';
 
 function randomBytes(n) {
