@@ -741,6 +741,7 @@ async function remoteDevices(){
       setup.hidden=!needsLogin;install.hidden=!needsInstall;setupActions.hidden=!(needsLogin||needsInstall);
       start.disabled=waiting;start.textContent=waiting?'외부 주소 준비 중…':https?'외부 주소 새로고침':'외부 주소 준비';
       stop.disabled=!status.enabled;
+      webSection.hidden=!account.linked;webUrl.value=account.serviceUrl||DEFAULT_ACCOUNT_SERVICE;
       revisitSection.hidden=!https;revisitUrl.value=status.url||'';revisitCopy.disabled=!https;
       accountBox.replaceChildren();
       if(account.linked){
@@ -759,7 +760,10 @@ async function remoteDevices(){
     };
     const clientSection=el('section','remote-account-section'),clientOpen=button('다른 PC에 접속','primary',()=>{$('#modal').close('client');showLoginScreen();});
     clientSection.append(el('h3','','다른 PC에 접속'),el('p','dialog-note','같은 계정을 연결해 둔 다른 PC를 이 앱에서 엽니다. 이 PC를 접속받는 PC로 등록하지 않으며 Tailscale도 필요 없습니다.'),clientOpen);
-    stop.classList.add('remote-stop');accountSection.append(accountTitle,accountBox);node.append(intro,summary,clientSection,accountSection,error,setupNote,setupActions,advanced);render();
+    const webSection=el('section','remote-account-section'),webUrl=el('input','dialog-input'),webCopy=button('주소 복사','secondary',guard(async()=>{if(webUrl.value){await call('clipboard',{text:webUrl.value});toast('로그인 주소를 복사했습니다.');}}));
+    webUrl.readOnly=true;const webRow=el('div','remote-actions');webRow.append(webUrl,webCopy);
+    webSection.append(el('h3','','모바일·태블릿 (웹)'),el('p','dialog-note','휴대폰·태블릿은 앱 설치 없이 브라우저에서 이 주소를 열고 같은 계정으로 로그인하세요. 이 PC의 터미널을 보고 입력할 수 있습니다.'),webRow);
+    stop.classList.add('remote-stop');accountSection.append(accountTitle,accountBox);node.append(intro,summary,clientSection,accountSection,webSection,error,setupNote,setupActions,advanced);render();
   });
   }finally{closed=true;unsub();tunnelUnsub();tailscaleUnsub();accountUnsub();}
 }

@@ -16,6 +16,8 @@ namespace Orbit {
         }
         public void Clear() { lock(gate){generation++;items.Clear();bytes=0;Monitor.PulseAll(gate);} }
         public void Close() { lock(gate){generation++;closed=true;items.Clear();bytes=0;Monitor.PulseAll(gate);} }
+        // The recent output as one text, for viewers that cannot get a screen snapshot from a UI terminal.
+        public string Replay(out long seq) { lock(gate) { seq=next;return String.Concat(items.Select(x=>x.Data)); } }
         public object Snapshot() { lock(gate) { return new { seq=next,items=items.Select(x=>new {seq=x.Seq,data=x.Data}).ToArray() }; } }
         public object After(long after,int timeout) {
             DateTime end=DateTime.UtcNow.AddMilliseconds(Math.Max(0,Math.Min(25000,timeout)));

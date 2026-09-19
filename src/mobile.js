@@ -299,7 +299,7 @@ function initInstallBanner() {
   const hide = () => { banner.hidden = true; savePreference('orbit.remote.installDismissed', '1'); };
   dismiss.onclick = hide;
   let deferred = null;
-  window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferred = event; text.textContent = '홈 화면에 추가하면 QR 없이 아이콘으로 바로 열 수 있어요.'; action.hidden = false; banner.hidden = false; });
+  window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferred = event; text.textContent = '홈 화면에 추가하면 아이콘으로 바로 열 수 있어요.'; action.hidden = false; banner.hidden = false; });
   action.onclick = async () => { if (!deferred) return; action.hidden = true; deferred.prompt(); deferred = null; banner.hidden = true; };
   if (isIOS) { text.textContent = '공유 버튼 → "홈 화면에 추가"를 누르면 아이콘으로 바로 열 수 있어요.'; banner.hidden = false; }
 }
