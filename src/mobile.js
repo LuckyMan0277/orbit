@@ -133,7 +133,7 @@ async function loadSessions(expected = run, preferred = '', access = token, dead
   const changed = !checkEpoch(data); available = true; sessions = Array.isArray(data.sessions) ? data.sessions : [];
   const keep = preferred || session; session = sessions.some(item => item.id === keep) ? keep : (sessions[0]?.id || ''); readySession = ''; seq = 0;
   renderTabs(); restoreDraft();
-  if (!session) { state('실행 중인 터미널이 없습니다.'); scheduleReconnect(); return false; }
+  if (!session) { $('#reconnect').hidden = true; controls(); state('실행 중인 터미널이 없습니다. 아래에서 새로 시작하세요.'); return false; }
   const loaded = await snapshot(expected, session, access, deadline); if (loaded) state(changed ? 'PC가 다시 시작되어 연결을 복원했습니다.' : '연결됨'); return loaded;
 }
 async function poll(expected = run, access = token) {
