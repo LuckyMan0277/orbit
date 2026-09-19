@@ -608,7 +608,7 @@ function showLoginScreen(auto){
   form.onsubmit=async event=>{
     event.preventDefault();if(busy)return;busy=true;login.disabled=true;login.textContent='로그인 중…';error.textContent='';
     try{
-      const result=await call('remoteClientLogin',{url:state.settings.remoteClientUrl||DEFAULT_ACCOUNT_SERVICE,email:email.value.trim(),password:password.value,remember:remember.checked});
+      const result=await call('remoteClientLogin',{url:DEFAULT_ACCOUNT_SERVICE,email:email.value.trim(),password:password.value,remember:remember.checked});
       state.settings.remoteClientEmail=email.value.trim();state.settings.remoteClientAuto=remember.checked;persist();
       password.value='';shell.remove();enterClientMode(result,email.value.trim());
     }catch(e){error.textContent=e.message||'로그인하지 못했습니다.';}

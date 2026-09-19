@@ -47,11 +47,11 @@ namespace Orbit {
    var json=new JavaScriptSerializer();
    try {
     var request=(HttpWebRequest)WebRequest.Create(session.Base+"/api/v1/projects");
-    request.Method="POST";request.ContentType="application/json";request.Timeout=15000;request.ReadWriteTimeout=15000;
+    request.Method="POST";request.ContentType="application/json";request.Timeout=15000;request.ReadWriteTimeout=15000;request.AllowAutoRedirect=false;
     request.Headers["Authorization"]="Bearer "+session.Token;
     byte[] bytes=Encoding.UTF8.GetBytes("{}");request.ContentLength=bytes.Length;
     using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
-    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=new StreamReader(response.GetResponseStream()))return json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
+    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=Reader(response))return json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
    } catch(WebException ex) {
     var r=ex.Response as HttpWebResponse;
     if(r!=null&&(int)r.StatusCode==401)throw new InvalidOperationException("호스트 PC가 이 로그인을 거부했습니다. 호스트에서 계정을 다시 연결했는지 확인해 주세요.");
@@ -69,17 +69,19 @@ namespace Orbit {
    var json=new JavaScriptSerializer();Dictionary<string,object> body;
    try {
     var request=(HttpWebRequest)WebRequest.Create(service.GetLeftPart(UriPartial.Authority)+service.AbsolutePath.TrimEnd('/')+"/login");
-    request.Method="POST";request.ContentType="application/json";request.Timeout=10000;request.ReadWriteTimeout=10000;
+    request.Method="POST";request.ContentType="application/json";request.Timeout=10000;request.ReadWriteTimeout=10000;request.AllowAutoRedirect=false;
     byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string,object>{{"email",email.Trim()},{"password",password}}));
     request.ContentLength=bytes.Length;
     using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
-    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=new StreamReader(response.GetResponseStream()))body=json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
+    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=Reader(response))body=json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
    } catch(WebException ex) {
     var errorResponse=ex.Response as HttpWebResponse;
     if(errorResponse==null)throw new InvalidOperationException("계정 서비스에 연결하지 못했습니다: "+ex.Message);
-    string code="";
+    int status=(int)errorResponse.StatusCode;string code="";
     try{using(errorResponse)using(var reader=new StreamReader(errorResponse.GetResponseStream())){object v;var e=json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());if(e!=null&&e.TryGetValue("error",out v))code=Convert.ToString(v);}}catch{}
-    throw new InvalidOperationException(LoginError(code));
+    string known=LoginError(code);
+    if(known==null)throw new InvalidOperationException("로그인하지 못했습니다. 계정 서비스("+service.Host+")가 예상과 다르게 응답했습니다. (HTTP "+status+")");
+    throw new InvalidOperationException(known);
    }
    object hostValue=null,tokenValue=null;
    if(body!=null){body.TryGetValue("url",out hostValue);body.TryGetValue("deviceToken",out tokenValue);}
@@ -93,9 +95,11 @@ namespace Orbit {
     case "invalid_credentials":return ClientCredentials.InvalidCredentials;
     case "no_pc_linked":return "이 계정에 연결된 PC가 없습니다. 접속받을 PC의 Orbit에서 먼저 계정을 연결하세요.";
     case "rate_limited":return "잠시 후 다시 시도해 주세요.";
-    default:return "로그인하지 못했습니다.";
+    default:return null;
    }
   }
+  // Redirects are not followed (they would turn the POST into a GET); report them instead of misparsing an empty body.
+  static StreamReader Reader(HttpWebResponse response){if((int)response.StatusCode>=300)throw new InvalidOperationException("주소가 다른 곳으로 이동시켰습니다. 계정 서비스 주소가 올바른지 확인해 주세요. (HTTP "+(int)response.StatusCode+")");return new StreamReader(response.GetResponseStream());}
   static bool Allowed(string value){Uri u;return Uri.TryCreate(value,UriKind.Absolute,out u)&&u.Scheme==Uri.UriSchemeHttps;}
   public static void Open(string value,CoreWebView2Environment environment,Icon icon) {
    value=(value??"").Trim();
