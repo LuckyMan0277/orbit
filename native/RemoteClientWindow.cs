@@ -1,5 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -28,6 +33,45 @@ namespace Orbit {
     } catch(Exception ex) { MessageBox.Show(this,"원격 접속 창을 열 수 없습니다.\n\n"+ex.Message,"Orbit");Close(); }
    };
    FormClosed+=delegate{if(current==this)current=null;web.Dispose();};
+  }
+  // Signs in at the account service from inside the app (nothing is stored) and
+  // returns the linked PC's mobile URL with the device token in the fragment,
+  // exactly like the web login page does. Throws with a user-facing message.
+  public static string Login(string serviceUrl,string email,string password) {
+   serviceUrl=(serviceUrl??"").Trim().TrimEnd('/');
+   if(serviceUrl.Length>0&&serviceUrl.IndexOf("://",StringComparison.Ordinal)<0)serviceUrl="https://"+serviceUrl;
+   Uri service;
+   if(!Uri.TryCreate(serviceUrl,UriKind.Absolute,out service)||service.Scheme!=Uri.UriSchemeHttps)throw new InvalidOperationException("https:// 로 시작하는 계정 서비스 주소를 입력해 주세요.");
+   if(String.IsNullOrWhiteSpace(email)||String.IsNullOrEmpty(password))throw new InvalidOperationException("이메일과 비밀번호를 입력해 주세요.");
+   var json=new JavaScriptSerializer();Dictionary<string,object> body;
+   try {
+    var request=(HttpWebRequest)WebRequest.Create(service.GetLeftPart(UriPartial.Authority)+service.AbsolutePath.TrimEnd('/')+"/login");
+    request.Method="POST";request.ContentType="application/json";request.Timeout=10000;request.ReadWriteTimeout=10000;
+    byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string,object>{{"email",email.Trim()},{"password",password}}));
+    request.ContentLength=bytes.Length;
+    using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
+    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=new StreamReader(response.GetResponseStream()))body=json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
+   } catch(WebException ex) {
+    var errorResponse=ex.Response as HttpWebResponse;
+    if(errorResponse==null)throw new InvalidOperationException("계정 서비스에 연결하지 못했습니다: "+ex.Message);
+    string code="";
+    try{using(errorResponse)using(var reader=new StreamReader(errorResponse.GetResponseStream())){object v;var e=json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());if(e!=null&&e.TryGetValue("error",out v))code=Convert.ToString(v);}}catch{}
+    throw new InvalidOperationException(LoginError(code));
+   }
+   object hostValue=null,tokenValue=null;
+   if(body!=null){body.TryGetValue("url",out hostValue);body.TryGetValue("deviceToken",out tokenValue);}
+   string host=Convert.ToString(hostValue),token=Convert.ToString(tokenValue);Uri hostUri;
+   if(String.IsNullOrEmpty(token)||!Uri.TryCreate(host,UriKind.Absolute,out hostUri)||hostUri.Scheme!=Uri.UriSchemeHttps)throw new InvalidOperationException("계정 서비스 응답이 올바르지 않습니다.");
+   return hostUri.GetLeftPart(UriPartial.Authority)+hostUri.AbsolutePath.TrimEnd('/')+"/mobile.html#login="+Uri.EscapeDataString(token);
+  }
+  static string LoginError(string code) {
+   switch(code) {
+    case "invalid_email":return "이메일 형식이 올바르지 않습니다.";
+    case "invalid_credentials":return "이메일 또는 비밀번호가 올바르지 않습니다.";
+    case "no_pc_linked":return "이 계정에 연결된 PC가 없습니다. 접속받을 PC의 Orbit에서 먼저 계정을 연결하세요.";
+    case "rate_limited":return "잠시 후 다시 시도해 주세요.";
+    default:return "로그인하지 못했습니다.";
+   }
   }
   static bool Allowed(string value){Uri u;return Uri.TryCreate(value,UriKind.Absolute,out u)&&u.Scheme==Uri.UriSchemeHttps;}
   public static void Open(string value,CoreWebView2Environment environment,Icon icon) {

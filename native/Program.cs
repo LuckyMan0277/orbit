@@ -226,6 +226,7 @@ namespace Orbit {
                     case "accountSignUp":result=await Task.Run(()=>account.SignUp(S(a,"email"),S(a,"password")));break;
                     case "accountLink":result=await Task.Run(()=>account.Link(S(a,"email"),S(a,"password")));break;
                     case "accountUnlink":result=await Task.Run(()=>account.Unlink());break;
+                    case "remoteClientLogin":{string target=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));RemoteClientWindow.Open(target,environment,Icon);result=new {ok=true};break;}
                     case "remoteClientOpen":RemoteClientWindow.Open(S(a,"url"),environment,Icon);result=new {ok=true};break;
                     case "remoteTailscaleSetup":OpenTailscaleSetup(S(a,"url"));result=new {ok=true};break;
                     case "remoteDiagnostic":result=await Task.Run(()=>RemoteDiagnostic());break;

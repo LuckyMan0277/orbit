@@ -134,6 +134,9 @@ async function initialize() {
   if (isDesktop && state.settings.remoteAutoConnect && !data.testMode) call('remoteConnectStart',{port:49821}).then(result=>{const s=result?.status;if(s){const badge=$('#external-state');badge.textContent=!s.enabled?'꺼짐':s.url?.startsWith('https:')?'외부 준비':'이 PC';}}).catch(error=>{const badge=$('#external-state');badge.textContent='연결 확인';badge.title=`자동 연결 실패: ${error.message}. 클릭하여 다시 연결하세요.`;$('#external-connection').title=badge.title;});
   if (typeof data.version === 'string') $('#app-version').textContent = data.version;
   if (isDesktop && !data.testMode) checkForUpdate();
+  // A PC that is already linked as a host has no reason to ask; anywhere else the
+  // first thing offered is logging in to another PC.
+  if (isDesktop && !data.testMode && !state.settings.startupLoginHidden) call('accountStatus').then(a=>{if(!a.linked)clientLoginDialog(true);}).catch(()=>{});
   state.folder = typeof data.folder === 'string' ? data.folder : '';
   // The native host supplies its launch folder on every start. Respect a
   // deliberate Home removal so that folder does not quietly return on reload.
@@ -579,6 +582,33 @@ async function installUpdate(result){
   toast('업데이트를 내려받는 중입니다…');
   await call('updateInstall');
 }
+const DEFAULT_ACCOUNT_SERVICE='https://orbit-account-service.studypad.workers.dev';
+// Logs in at the account service and opens the linked PC in its own window. This
+// PC is only a client here: it is never registered as a host and needs no Tailscale.
+async function clientLoginDialog(startup){
+  const account=await call('accountStatus').catch(()=>({}));
+  const url=el('input','dialog-input'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','dialog-note'),hide=document.createElement('input'),hideLabel=el('label','dialog-note');
+  url.placeholder='계정 서비스 주소 (https://…)';url.value=state.settings.remoteClientUrl||account.serviceUrl||DEFAULT_ACCOUNT_SERVICE;
+  email.type='email';email.placeholder='이메일';email.autocomplete='username';email.value=state.settings.remoteClientEmail||'';
+  password.type='password';password.placeholder='비밀번호';password.autocomplete='current-password';
+  hide.type='checkbox';hideLabel.append(hide,document.createTextNode(' 시작할 때 다시 묻지 않기'));
+  let busy=false;const login=button('로그인','primary',()=>submit());
+  const submit=async()=>{
+    if(busy)return;busy=true;login.disabled=true;error.textContent='';
+    try{
+      await call('remoteClientLogin',{url:url.value.trim(),email:email.value.trim(),password:password.value});
+      state.settings.remoteClientUrl=url.value.trim();state.settings.remoteClientEmail=email.value.trim();persist();
+      password.value='';$('#modal').close('login');
+    }catch(e){error.textContent=e.message||'로그인하지 못했습니다.';}
+    finally{busy=false;login.disabled=false;}
+  };
+  for(const input of [url,email,password])input.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();submit();}});
+  const result=await dialog(startup?'Orbit 로그인':'다른 PC에 접속',node=>{
+    node.append(el('p','dialog-note','같은 계정을 연결해 둔 다른 PC의 작업 공간에 접속합니다. 이 PC에는 Tailscale이 필요 없고, 이 PC를 접속받는 PC로 등록하지도 않습니다.'),url,email,password,error,login);
+    if(startup)node.append(hideLabel);
+  },[{value:'skip',label:startup?'이 PC만 사용':'닫기'}]);
+  if(startup&&hide.checked&&result!=='login'){state.settings.startupLoginHidden=true;persist();}
+}
 async function remoteDevices(){
   let status=await call('remoteStatus'),tunnel=await call('remoteTunnelStatus').catch(()=>({})),tailscale=await call('remoteTailscaleStatus').catch(()=>({})),account=await call('accountStatus').catch(()=>({})),connecting=false,closed=false,connectionError=tailscale.error||tunnel.error||'',accountBusy=false,accountError=account.error||'';
   let render=()=>{};const merge=result=>{if(result&&result.status)status=result.status;if(result&&result.tunnel)tunnel=result.tunnel;if(result&&result.tailscale)tailscale=result.tailscale;};
@@ -662,7 +692,9 @@ async function remoteDevices(){
       accountErrorNote.hidden=!accountError;accountErrorNote.textContent=accountError;
       accountBox.append(accountErrorNote);
     };
-    stop.classList.add('remote-stop');accountSection.append(accountTitle,accountBox);node.append(intro,summary,accountSection,error,setupNote,setupActions,advanced);render();
+    const clientSection=el('section','remote-account-section'),clientOpen=button('다른 PC에 접속','primary',()=>{$('#modal').close('client');clientLoginDialog(false);});
+    clientSection.append(el('h3','','다른 PC에 접속'),el('p','dialog-note','같은 계정을 연결해 둔 다른 PC를 이 앱에서 엽니다. 이 PC를 접속받는 PC로 등록하지 않으며 Tailscale도 필요 없습니다.'),clientOpen);
+    stop.classList.add('remote-stop');accountSection.append(accountTitle,accountBox);node.append(intro,summary,clientSection,accountSection,error,setupNote,setupActions,advanced);render();
   });
   }finally{closed=true;unsub();tunnelUnsub();tailscaleUnsub();accountUnsub();}
 }
