@@ -283,6 +283,9 @@ $('#menu-toggle').onclick = () => { $('#menu-panel').hidden = !$('#menu-panel').
 $('#theme').onchange = event => { themeChoice = event.target.value; savePreference('orbit.remote.theme', themeChoice); applyTheme(); }; $('#readable-output').onscroll = () => { $('#latest').hidden = atOutputEnd(); };
 visualViewport?.addEventListener('resize', updateViewport); window.addEventListener('resize', updateViewport); matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice === 'system') applyTheme(); });
 const hashToken = parseLoginToken(location.href);
+// The desktop app's client mode opens a specific project of this PC via #project=.
+const hashProject = (String(location.hash).match(/(?:^|[#&])project=([^&]+)/) || [])[1];
+if (hashProject) { try { project = decodeURIComponent(hashProject); savePreference('orbit.remote.project', project); } catch { /* ignore a malformed value */ } }
 if (hashToken) { if (token !== hashToken) { invalidateComposeState(); serverEpoch = ''; } token = hashToken; if (!saveCredentials(token)) { token = ''; storageBlocked = true; } history.replaceState(null, '', location.pathname); }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { pollAbort?.abort(); clearTimeout(retryTimer); } else refresh(); }); window.addEventListener('online', refresh); window.addEventListener('offline', () => { available = false; controls(); state('오프라인', true); });
 if (token) { showWorkspace(); } else { $('#boot').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/mobile-sw.js').catch(() => {});

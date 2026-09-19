@@ -7,11 +7,11 @@ const state = { folder: '', terminals: [], terminalCreating: 0, active: null, te
 const profiles = { codex: { name: 'Codex', subtitle: 'OpenAI CLI', mark: '✳', class: 'codex' }, claude: { name: 'Claude', subtitle: 'Anthropic CLI', mark: '✺', class: 'claude' }, powershell: { name: 'PowerShell', subtitle: '기본 터미널', mark: '>_', class: 'shell' }, cmd: { name: 'CMD', subtitle: '명령 프롬프트', mark: '>_', class: 'shell' } };
 const basename = path => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 const projectKey = path => String(path || '').toLowerCase();
-const projectName = path => state.settings.projectNames?.[projectKey(path)] || basename(path);
+const projectName = path => state.client ? (state.client.names[path] || basename(path)) : (state.settings.projectNames?.[projectKey(path)] || basename(path));
 const app = $('#app');
 app.innerHTML = `
   <section class="home-screen" id="home-screen" aria-label="Orbit 홈">
-    <header class="home-header"><div class="home-brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><span>orbit</span></div><div class="home-header-actions"><button class="external-connection update-available" data-update hidden></button><button id="home-pick-folder" class="home-open-folder">프로젝트 추가</button><div class="window-controls home-window-controls" aria-label="창 제어"><button id="home-window-minimize" title="최소화" aria-label="최소화"></button><button id="home-window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="home-window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
+    <header class="home-header"><div class="home-brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><span>orbit</span></div><div class="home-header-actions"><button class="external-connection update-available" data-update hidden></button><button id="home-pick-folder" class="home-open-folder">프로젝트 추가</button><button id="home-client-refresh" class="home-open-folder client-only">새로 고침</button><button id="home-client-logout" class="home-open-folder client-only">로그아웃</button><div class="window-controls home-window-controls" aria-label="창 제어"><button id="home-window-minimize" title="최소화" aria-label="최소화"></button><button id="home-window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="home-window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
     <main class="home-stage"><section class="home-orbit-system" id="home-orbit" aria-label="최근 프로젝트"></section><div class="home-recent-note"><small>프로젝트 점을 선택해 작업 공간을 엽니다.</small></div></main>
   </section>
   <aside class="sidebar">
@@ -83,6 +83,8 @@ sidebarTabs.onkeydown=event=>{
 setSidebarMode('saved',false);
 $('#pick-folder').onclick = guard(pickFolder);
 $('#home-pick-folder').onclick = guard(pickHomeProject);
+$('#home-client-refresh').onclick = guard(refreshClientProjects);
+$('#home-client-logout').onclick = guard(leaveClientMode);
 $('#home-window-minimize').onclick = () => notify('windowMinimize');
 $('#home-window-maximize').onclick = () => notify('windowMaximize');
 $('#home-window-close').onclick = () => notify('windowClose');
@@ -136,7 +138,7 @@ async function initialize() {
   if (isDesktop && !data.testMode) checkForUpdate();
   // A PC that is already linked as a host has no reason to ask; anywhere else the
   // first thing offered is logging in to another PC.
-  if (isDesktop && !data.testMode && !state.settings.startupLoginHidden) call('accountStatus').then(a=>{if(!a.linked)clientLoginDialog(true);}).catch(()=>{});
+  if (isDesktop && !data.testMode && !state.settings.startupLoginHidden) call('accountStatus').then(a=>{if(!a.linked)showLoginScreen();}).catch(()=>{});
   state.folder = typeof data.folder === 'string' ? data.folder : '';
   // The native host supplies its launch folder on every start. Respect a
   // deliberate Home removal so that folder does not quietly return on reload.
@@ -180,7 +182,7 @@ function renderHomeOrbit() {
   const labelLayer = el('div', 'home-project-label-layer');
   system.append(labelLayer);
   if (!projects.length) {
-    const empty = button('첫 프로젝트 추가', 'home-empty-project', guard(pickHomeProject));
+    const empty = state.client ? button('호스트에 프로젝트가 없습니다 · 새로 고침', 'home-empty-project', guard(refreshClientProjects)) : button('첫 프로젝트 추가', 'home-empty-project', guard(pickHomeProject));
     system.append(empty);
     return;
   }
@@ -203,14 +205,14 @@ function renderHomeOrbit() {
     orbit.style.setProperty('--orbit-ry', ry);
     orbit.style.setProperty('--orbit-tilt', `${tilt}deg`);
     orbit.append(el('span', 'home-orbit-track'));
-    const dot = button('', 'home-project-dot', guard(() => setFolder(path)), `${projectName(path)} 작업 공간 열기`);
+    const dot = button('', 'home-project-dot', guard(() => openProject(path)), `${projectName(path)} 작업 공간 열기`);
     dot.style.setProperty('--orbit-duration', `${duration}s`);
     dot.style.setProperty('--orbit-delay', `${delay}s`);
     dot.style.setProperty('--orbit-rest-distance', `${[25, 58, 82][index % 3]}%`);
     dot.style.setProperty('--dot-color', ['#f9eaff', '#d5aaff', '#a9c9ff', '#ffc1e5', '#c4ffd7', '#ffe6a8'][index % 6]);
     dot.dataset.workspace = path;
     dot.append(el('span', 'home-project-dot-mark'));
-    const label = button(projectName(path), 'home-project-label', guard(() => setFolder(path)), `${projectName(path)} 작업 공간 열기`);
+    const label = button(projectName(path), 'home-project-label', guard(() => openProject(path)), `${projectName(path)} 작업 공간 열기`);
     label.style.setProperty('--orbit-rx', rx);
     label.style.setProperty('--orbit-ry', ry);
     label.style.setProperty('--orbit-duration', `${duration}s`);
@@ -282,6 +284,7 @@ async function resumeSavedSession(item) {const open=state.terminals.find(t=>t.pr
 function persist() { return call('settings', state.settings).catch(e => toast(e.message, true)); }
 function matchesProject(left, right) { return typeof left === 'string' && typeof right === 'string' && left.toLowerCase() === right.toLowerCase(); }
 function visibleProjects() {
+  if (state.client) return state.client.projects.map(item => item.path).slice(0, 8);
   const removed = state.settings.removedProjects || [];
   return [state.folder, ...state.settings.recent]
     .filter((path, index, paths) => typeof path === 'string' && path && !removed.some(value => matchesProject(value, path)) && paths.findIndex(value => matchesProject(value, path)) === index)
@@ -583,32 +586,52 @@ async function installUpdate(result){
   await call('updateInstall');
 }
 const DEFAULT_ACCOUNT_SERVICE='https://orbit-account-service.studypad.workers.dev';
-// Logs in at the account service and opens the linked PC in its own window. This
-// PC is only a client here: it is never registered as a host and needs no Tailscale.
-async function clientLoginDialog(startup){
-  const account=await call('accountStatus').catch(()=>({}));
-  const url=el('input','dialog-input'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','dialog-note'),hide=document.createElement('input'),hideLabel=el('label','dialog-note');
-  url.placeholder='계정 서비스 주소 (https://…)';url.value=state.settings.remoteClientUrl||account.serviceUrl||DEFAULT_ACCOUNT_SERVICE;
+// Full-screen login for a PC that is only a client: signs in at the account
+// service, then shows the linked PC's projects as the Home orbit. Opening a
+// project shows that PC's terminals in a separate window (no local bridge).
+function showLoginScreen(){
+  if($('#client-login'))return;
+  const shell=el('section','client-login');shell.id='client-login';
+  const header=el('header','client-login-header'),brand=el('div','home-brand'),mark=document.createElement('img');
+  mark.className='orbit-wordmark-mark';mark.src='./orbit.svg';mark.alt='';brand.append(mark,el('span','','orbit'));
+  const controls=el('div','window-controls home-window-controls');
+  for(const [name,label,method] of [['minimize','최소화','windowMinimize'],['maximize','최대화 또는 복원','windowMaximize'],['close','닫기','windowClose']]){const b=el('button',name==='close'?'window-close':'',''); b.type='button';b.title=label;b.setAttribute('aria-label',label);b.append(icon(name));b.onclick=()=>notify(method);controls.append(b);}
+  header.append(brand,controls);
+  const form=el('form','client-login-form'),url=el('input','dialog-input'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','client-login-error'),hide=document.createElement('input'),hideLabel=el('label','client-login-hide');
+  url.placeholder='계정 서비스 주소 (https://…)';url.value=state.settings.remoteClientUrl||DEFAULT_ACCOUNT_SERVICE;url.autocomplete='off';
   email.type='email';email.placeholder='이메일';email.autocomplete='username';email.value=state.settings.remoteClientEmail||'';
   password.type='password';password.placeholder='비밀번호';password.autocomplete='current-password';
-  hide.type='checkbox';hideLabel.append(hide,document.createTextNode(' 시작할 때 다시 묻지 않기'));
-  let busy=false;const login=button('로그인','primary',()=>submit());
-  const submit=async()=>{
-    if(busy)return;busy=true;login.disabled=true;error.textContent='';
+  hide.type='checkbox';hideLabel.append(hide,document.createTextNode(' 시작할 때 이 화면을 표시하지 않기'));
+  const login=el('button','primary','로그인'),skip=el('button','secondary','이 PC만 사용');login.type='submit';skip.type='button';
+  error.setAttribute('role','alert');
+  form.append(el('h1','','Orbit 로그인'),el('p','client-login-note','계정에 연결된 PC의 프로젝트를 이 PC에서 엽니다. 이 PC는 접속받는 PC로 등록되지 않고 Tailscale도 필요 없습니다.'),email,password,url,error,login,skip,hideLabel);
+  let busy=false;
+  form.onsubmit=async event=>{
+    event.preventDefault();if(busy)return;busy=true;login.disabled=true;login.textContent='로그인 중…';error.textContent='';
     try{
-      await call('remoteClientLogin',{url:url.value.trim(),email:email.value.trim(),password:password.value});
+      const result=await call('remoteClientLogin',{url:url.value.trim(),email:email.value.trim(),password:password.value});
       state.settings.remoteClientUrl=url.value.trim();state.settings.remoteClientEmail=email.value.trim();persist();
-      password.value='';$('#modal').close('login');
+      password.value='';shell.remove();enterClientMode(result,email.value.trim());
     }catch(e){error.textContent=e.message||'로그인하지 못했습니다.';}
-    finally{busy=false;login.disabled=false;}
+    finally{busy=false;login.disabled=false;login.textContent='로그인';}
   };
-  for(const input of [url,email,password])input.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();submit();}});
-  const result=await dialog(startup?'Orbit 로그인':'다른 PC에 접속',node=>{
-    node.append(el('p','dialog-note','같은 계정을 연결해 둔 다른 PC의 작업 공간에 접속합니다. 이 PC에는 Tailscale이 필요 없고, 이 PC를 접속받는 PC로 등록하지도 않습니다.'),url,email,password,error,login);
-    if(startup)node.append(hideLabel);
-  },[{value:'skip',label:startup?'이 PC만 사용':'닫기'}]);
-  if(startup&&hide.checked&&result!=='login'){state.settings.startupLoginHidden=true;persist();}
+  skip.onclick=()=>{if(hide.checked){state.settings.startupLoginHidden=true;persist();}shell.remove();};
+  shell.append(header,form);document.body.append(shell);email.value?password.focus():email.focus();
 }
+function enterClientMode(result,emailValue){
+  const projects=(Array.isArray(result?.projects)?result.projects:[]).filter(item=>item&&typeof item.path==='string');
+  state.client={email:emailValue,projects,names:Object.fromEntries(projects.map(item=>[item.path,typeof item.name==='string'&&item.name?item.name:basename(item.path)]))};
+  document.body.classList.add('client-mode');showHome();
+}
+async function leaveClientMode(){
+  await call('remoteClientLogout').catch(()=>{});
+  state.client=null;document.body.classList.remove('client-mode');renderHomeOrbit();showLoginScreen();
+}
+async function refreshClientProjects(){
+  try{enterClientMode(await call('remoteClientProjects'),state.client?.email);}
+  catch(e){toast(e.message,true);}
+}
+const openProject = path => state.client ? call('remoteClientOpen',{project:path}) : setFolder(path);
 async function remoteDevices(){
   let status=await call('remoteStatus'),tunnel=await call('remoteTunnelStatus').catch(()=>({})),tailscale=await call('remoteTailscaleStatus').catch(()=>({})),account=await call('accountStatus').catch(()=>({})),connecting=false,closed=false,connectionError=tailscale.error||tunnel.error||'',accountBusy=false,accountError=account.error||'';
   let render=()=>{};const merge=result=>{if(result&&result.status)status=result.status;if(result&&result.tunnel)tunnel=result.tunnel;if(result&&result.tailscale)tailscale=result.tailscale;};
@@ -692,7 +715,7 @@ async function remoteDevices(){
       accountErrorNote.hidden=!accountError;accountErrorNote.textContent=accountError;
       accountBox.append(accountErrorNote);
     };
-    const clientSection=el('section','remote-account-section'),clientOpen=button('다른 PC에 접속','primary',()=>{$('#modal').close('client');clientLoginDialog(false);});
+    const clientSection=el('section','remote-account-section'),clientOpen=button('다른 PC에 접속','primary',()=>{$('#modal').close('client');showLoginScreen();});
     clientSection.append(el('h3','','다른 PC에 접속'),el('p','dialog-note','같은 계정을 연결해 둔 다른 PC를 이 앱에서 엽니다. 이 PC를 접속받는 PC로 등록하지 않으며 Tailscale도 필요 없습니다.'),clientOpen);
     stop.classList.add('remote-stop');accountSection.append(accountTitle,accountBox);node.append(intro,summary,clientSection,accountSection,error,setupNote,setupActions,advanced);render();
   });

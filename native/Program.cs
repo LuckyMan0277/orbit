@@ -39,6 +39,7 @@ namespace Orbit {
         private long nextSnapshotId;
         private RemoteServer remote;
         private RemoteAccount account;
+        private RemoteClientWindow.Session clientSession;
         private string configuredRemoteOrigin;
         private readonly RemoteTunnel tunnel=new RemoteTunnel();
         private readonly RemoteTailscale tailscale=new RemoteTailscale();
@@ -226,8 +227,10 @@ namespace Orbit {
                     case "accountSignUp":result=await Task.Run(()=>account.SignUp(S(a,"email"),S(a,"password")));break;
                     case "accountLink":result=await Task.Run(()=>account.Link(S(a,"email"),S(a,"password")));break;
                     case "accountUnlink":result=await Task.Run(()=>account.Unlink());break;
-                    case "remoteClientLogin":{string target=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));RemoteClientWindow.Open(target,environment,Icon);result=new {ok=true};break;}
-                    case "remoteClientOpen":RemoteClientWindow.Open(S(a,"url"),environment,Icon);result=new {ok=true};break;
+                    case "remoteClientLogin":{var session=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));var list=await Task.Run(()=>RemoteClientWindow.Projects(session));clientSession=session;result=list;break;}
+                    case "remoteClientOpen":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");RemoteClientWindow.Open(clientSession.MobileUrl(S(a,"project")),environment,Icon);result=new {ok=true};break;
+                    case "remoteClientProjects":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");result=await Task.Run(()=>RemoteClientWindow.Projects(clientSession));break;
+                    case "remoteClientLogout":clientSession=null;RemoteClientWindow.CloseCurrent();result=new {ok=true};break;
                     case "remoteTailscaleSetup":OpenTailscaleSetup(S(a,"url"));result=new {ok=true};break;
                     case "remoteDiagnostic":result=await Task.Run(()=>RemoteDiagnostic());break;
                     case "remoteSnapshot": { RemoteSnapshot snapshot; string key=S(a,"request"); if(remoteSnapshots.TryGetValue(key,out snapshot)){snapshot.Data=S(a,"data");snapshot.Seq=L(a,"seq");snapshot.Cols=N(a,"cols");snapshot.Rows=N(a,"rows");try{snapshot.Ready.Set();}catch(ObjectDisposedException){}}break; }

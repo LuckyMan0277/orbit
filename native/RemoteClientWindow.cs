@@ -37,7 +37,27 @@ namespace Orbit {
   // Signs in at the account service from inside the app (nothing is stored) and
   // returns the linked PC's mobile URL with the device token in the fragment,
   // exactly like the web login page does. Throws with a user-facing message.
-  public static string Login(string serviceUrl,string email,string password) {
+  internal sealed class Session {
+   public string Base,Token;
+   public string MobileUrl(string project){return Base+"/mobile.html#login="+Uri.EscapeDataString(Token)+(String.IsNullOrEmpty(project)?"":"&project="+Uri.EscapeDataString(project));}
+  }
+  // The linked PC's project list, i.e. what its Home orbit shows.
+  public static object Projects(Session session) {
+   var json=new JavaScriptSerializer();
+   try {
+    var request=(HttpWebRequest)WebRequest.Create(session.Base+"/api/v1/projects");
+    request.Method="POST";request.ContentType="application/json";request.Timeout=15000;request.ReadWriteTimeout=15000;
+    request.Headers["Authorization"]="Bearer "+session.Token;
+    byte[] bytes=Encoding.UTF8.GetBytes("{}");request.ContentLength=bytes.Length;
+    using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
+    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=new StreamReader(response.GetResponseStream()))return json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
+   } catch(WebException ex) {
+    var r=ex.Response as HttpWebResponse;
+    if(r!=null&&(int)r.StatusCode==401)throw new InvalidOperationException("호스트 PC가 이 로그인을 거부했습니다. 호스트에서 계정을 다시 연결했는지 확인해 주세요.");
+    throw new InvalidOperationException("호스트 PC에 연결하지 못했습니다. 호스트의 Orbit이 켜져 있고 외부 주소가 준비됐는지 확인해 주세요."+(r!=null?" (HTTP "+(int)r.StatusCode+")":""));
+   }
+  }
+  public static Session Login(string serviceUrl,string email,string password) {
    serviceUrl=(serviceUrl??"").Trim().TrimEnd('/');
    if(serviceUrl.Length>0&&serviceUrl.IndexOf("://",StringComparison.Ordinal)<0)serviceUrl="https://"+serviceUrl;
    Uri service;
@@ -62,7 +82,7 @@ namespace Orbit {
    if(body!=null){body.TryGetValue("url",out hostValue);body.TryGetValue("deviceToken",out tokenValue);}
    string host=Convert.ToString(hostValue),token=Convert.ToString(tokenValue);Uri hostUri;
    if(String.IsNullOrEmpty(token)||!Uri.TryCreate(host,UriKind.Absolute,out hostUri)||hostUri.Scheme!=Uri.UriSchemeHttps)throw new InvalidOperationException("계정 서비스 응답이 올바르지 않습니다.");
-   return hostUri.GetLeftPart(UriPartial.Authority)+hostUri.AbsolutePath.TrimEnd('/')+"/mobile.html#login="+Uri.EscapeDataString(token);
+   return new Session{Base=hostUri.GetLeftPart(UriPartial.Authority)+hostUri.AbsolutePath.TrimEnd('/'),Token=token};
   }
   static string LoginError(string code) {
    switch(code) {
@@ -79,9 +99,11 @@ namespace Orbit {
    if(value.Length>0&&value.IndexOf("://",StringComparison.Ordinal)<0)value="https://"+value;
    Uri uri;
    if(!Uri.TryCreate(value,UriKind.Absolute,out uri)||uri.Scheme!=Uri.UriSchemeHttps)throw new InvalidOperationException("https:// 로 시작하는 계정 서비스 주소를 입력해 주세요.");
-   if(current!=null&&!current.IsDisposed){current.Activate();return;}
+   // A page that only differs in its fragment would not reload, so replace the window.
+   CloseCurrent();
    current=new RemoteClientWindow(uri.AbsoluteUri,environment,icon);
    current.Show();
   }
+  public static void CloseCurrent(){var w=current;current=null;if(w!=null&&!w.IsDisposed)w.Close();}
  }
 }
