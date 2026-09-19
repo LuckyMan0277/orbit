@@ -50,6 +50,19 @@ namespace Orbit {
                 if(!RemoteTailscale.FunnelReady("Available on the internet:\nhttps://orbit.example.ts.net/","https://orbit.example.ts.net"))throw new Exception("ready output missed");
                 if(RemoteTailscale.FunnelReady("Available on the internet:\nhttps://other.ts.net","https://orbit.example.ts.net"))throw new Exception("wrong public URL accepted");
             });
+            test("update check accepts only newer releases hosted in the Orbit repository",()=> {
+                var current=new Version(0,1,0,0);
+                if(!Updater.IsNewer(Updater.ParseTag("v0.2.0"),current))throw new Exception("newer tag was not detected");
+                if(Updater.IsNewer(Updater.ParseTag("v0.1.0"),current))throw new Exception("same version counted as an update");
+                if(Updater.IsNewer(Updater.ParseTag("v0.0.9"),current))throw new Exception("older version counted as an update");
+                if(Updater.ParseTag("latest")!=null||Updater.ParseTag("v1.2")!=null||Updater.ParseTag("")!=null)throw new Exception("malformed tag was accepted");
+                string asset="{\"name\":\"Orbit-Setup.exe\",\"browser_download_url\":\"https://github.com/LuckyMan0277/orbit/releases/download/v0.2.0/Orbit-Setup.exe\",\"digest\":\"sha256:ABC123\"}";
+                var release=Updater.Parse("{\"tag_name\":\"v0.2.0\",\"body\":\"notes\",\"assets\":["+asset+"]}");
+                if(release==null||release.Sha256!="abc123"||release.Version.ToString(3)!="0.2.0")throw new Exception("valid release was not parsed");
+                if(Updater.Parse("{\"tag_name\":\"v0.2.0\",\"assets\":["+asset.Replace("https://github.com/LuckyMan0277/orbit/","https://evil.example/")+"]}")!=null)throw new Exception("foreign download host was accepted");
+                if(Updater.Parse("{\"tag_name\":\"v0.2.0\",\"draft\":true,\"assets\":["+asset+"]}")!=null)throw new Exception("draft release was accepted");
+                if(Updater.Parse("{\"tag_name\":\"v0.2.0\",\"assets\":[]}")!=null)throw new Exception("release without installer was accepted");
+            });
             test("Tailscale loopback transport preserves auth and POST routing",()=> {
                 int port=FreePort();var terminals=new TestTerminals();using(var server=new RemoteServer(terminals,Path.Combine(dir,"remote-devices.json")))using(var proxy=new LoopbackHostProxy(port)){
                     server.Start(port);

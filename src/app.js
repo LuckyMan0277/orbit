@@ -15,7 +15,7 @@ app.innerHTML = `
     <main class="home-stage"><section class="home-orbit-system" id="home-orbit" aria-label="최근 프로젝트"></section><div class="home-recent-note"><small>프로젝트 점을 선택해 작업 공간을 엽니다.</small></div></main>
   </section>
   <aside class="sidebar">
-    <div class="brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><div>orbit<span class="brand-caption">AGENT WORKSPACE</span></div><span class="version">0.1</span></div>
+    <div class="brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><div>orbit<span class="brand-caption">AGENT WORKSPACE</span></div><span class="version" id="app-version"></span></div>
     <button class="workspace-picker" id="pick-folder"><span class="folder-symbol"></span><span class="workspace-name"><small>WORKSPACE</small><strong id="folder-name">불러오는 중…</strong></span><span class="picker-arrow" id="picker-arrow"></span></button>
     <div class="side-heading"><span>탐색기</span><div id="tree-actions"></div></div>
     <div class="file-filter"><span id="filter-icon"></span><input id="file-filter" placeholder="표시된 파일 필터…" aria-label="표시된 파일 필터"></div>
@@ -23,7 +23,7 @@ app.innerHTML = `
     <div class="sidebar-bottom"><div class="side-heading"><span>빠른 도구</span><span class="tiny">WORKFLOW</span></div><div id="quick-tools"></div><div class="resource-card" id="resource-card"><span id="resource-leaf"></span><div><strong id="power-label">가볍게 실행 중</strong><small id="power-detail">절약 모드 · 스크롤 기록 500줄</small></div><span class="status-dot"></span></div><button id="preferences" class="settings-button"><span id="settings-icon"></span>설정 및 사용량<span>⌘</span></button></div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="breadcrumb"><button id="home-return" class="home-return" title="Home" aria-label="Return to Home">orbit</button><button id="sidebar-toggle" class="icon-button" title="사이드바 토글 (Ctrl+B)" aria-label="사이드바 토글"></button><span id="breadcrumb-folder">workspace</span><span class="slash">/</span><span>작업 공간</span><span class="terminal-mini">터미널 <span id="session-count">0</span></span></div><div class="topbar-right"><button id="external-connection" class="external-connection" aria-label="기기 연결" title="기기 연결 · 계정 로그인"><span id="external-icon"></span><span>외부 연결</span><small id="external-state">꺼짐</small></button><div class="toolbar-actions" id="workspace-actions"></div><button class="command-trigger" id="command-button">명령 찾기 <kbd>Ctrl K</kbd></button><div class="window-controls" aria-label="창 제어"><button id="window-minimize" title="최소화" aria-label="최소화"></button><button id="window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
+    <header class="topbar"><div class="breadcrumb"><button id="home-return" class="home-return" title="Home" aria-label="Return to Home">orbit</button><button id="sidebar-toggle" class="icon-button" title="사이드바 토글 (Ctrl+B)" aria-label="사이드바 토글"></button><span id="breadcrumb-folder">workspace</span><span class="slash">/</span><span>작업 공간</span><span class="terminal-mini">터미널 <span id="session-count">0</span></span></div><div class="topbar-right"><button id="update-available" class="external-connection update-available" hidden></button><button id="external-connection" class="external-connection" aria-label="기기 연결" title="기기 연결 · 계정 로그인"><span id="external-icon"></span><span>외부 연결</span><small id="external-state">꺼짐</small></button><div class="toolbar-actions" id="workspace-actions"></div><button class="command-trigger" id="command-button">명령 찾기 <kbd>Ctrl K</kbd></button><div class="window-controls" aria-label="창 제어"><button id="window-minimize" title="최소화" aria-label="최소화"></button><button id="window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
     <div class="work-area" id="work-area">
       <section class="terminal-section" id="terminal-section">
         <div id="welcome" class="welcome">
@@ -132,6 +132,8 @@ async function initialize() {
   if (isDesktop && typeof state.settings.remoteOrigin === 'string' && state.settings.remoteOrigin) call('remotePublicOrigin', { url: state.settings.remoteOrigin }).catch(()=>{});
   if (isDesktop) { const updateRemoteBadge=s=>{$('#external-state').textContent=!s.enabled?'꺼짐':s.url?.startsWith('https:')?'외부 준비':'이 PC';};call('remoteStatus').then(updateRemoteBadge).catch(()=>{});on('remoteStatus',data=>updateRemoteBadge(data.status)); } else { $('#status-text').textContent = '터미널 실행은 데스크톱 앱에서'; }
   if (isDesktop && state.settings.remoteAutoConnect && !data.testMode) call('remoteConnectStart',{port:49821}).then(result=>{const s=result?.status;if(s){const badge=$('#external-state');badge.textContent=!s.enabled?'꺼짐':s.url?.startsWith('https:')?'외부 준비':'이 PC';}}).catch(error=>{const badge=$('#external-state');badge.textContent='연결 확인';badge.title=`자동 연결 실패: ${error.message}. 클릭하여 다시 연결하세요.`;$('#external-connection').title=badge.title;});
+  if (typeof data.version === 'string') $('#app-version').textContent = data.version;
+  if (isDesktop && !data.testMode) checkForUpdate();
   state.folder = typeof data.folder === 'string' ? data.folder : '';
   // The native host supplies its launch folder on every start. Respect a
   // deliberate Home removal so that folder does not quietly return on reload.
@@ -560,6 +562,21 @@ function applyTheme() {
   notify('theme', { value: state.settings.theme });
   for (const terminal of state.terminals) terminal.pane.configure(state.settings);
   if (state.editor && state.editorModule) state.editorModule.updateTheme(state.editor, state.settings.theme);
+}
+function checkForUpdate(){
+  call('updateCheck').then(result=>{
+    if(!result||!result.available)return;
+    const badge=$('#update-available');
+    badge.textContent='업데이트 v'+result.version;badge.title='현재 v'+result.current+' → 새 버전 v'+result.version;badge.hidden=false;
+    badge.onclick=guard(()=>installUpdate(result));
+  }).catch(()=>{});
+}
+async function installUpdate(result){
+  const running=state.terminals.length;
+  const text='v'+result.current+'에서 v'+result.version+'으로 업데이트합니다. Orbit이 종료된 뒤 새 버전이 설치되고 자동으로 다시 실행됩니다.'+(running?' 실행 중인 터미널 '+running+'개가 종료됩니다.':'')+' 저장하지 않은 파일이 있으면 먼저 저장하세요.';
+  if(!await confirm('업데이트 v'+result.version,text,'지금 업데이트'))return;
+  toast('업데이트를 내려받는 중입니다…');
+  await call('updateInstall');
 }
 async function remoteDevices(){
   let status=await call('remoteStatus'),tunnel=await call('remoteTunnelStatus').catch(()=>({})),tailscale=await call('remoteTailscaleStatus').catch(()=>({})),account=await call('accountStatus').catch(()=>({})),connecting=false,closed=false,connectionError=tailscale.error||tunnel.error||'',accountBusy=false,accountError=account.error||'';

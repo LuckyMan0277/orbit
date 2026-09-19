@@ -23,6 +23,14 @@ Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스�
 
 앱 자체는 Codex·Claude CLI 설치나 그 CLI들의 로그인을 대신 진행하지 않습니다. 각 CLI의 로그인·승인·작업 과정은 터미널에 그대로 표시됩니다. (원격 접속용 Orbit 계정은 별개이며, 위 **외부 연결** 참고.)
 
+## 설치와 업데이트
+
+[Releases](https://github.com/LuckyMan0277/orbit/releases/latest)에서 `Orbit-Setup.exe`를 받아 실행하면 설치됩니다. 관리자 권한 없이 `%LocalAppData%\Programs\Orbit`에 설치되고, 바탕화면 아이콘(선택)과 시작 메뉴 항목이 만들어지며 Windows 설정의 앱 목록에서 제거할 수 있습니다. 설정·계정·등록 정보는 `%LocalAppData%\OrbitAgentDesktop`에 따로 있어 업데이트해도 유지됩니다.
+
+Orbit은 실행할 때마다 GitHub에서 새 버전이 있는지 확인합니다(백그라운드 상시 확인은 없음). 새 버전이 있으면 상단에 **업데이트 vX.Y.Z** 버튼이 나타나고, 누르면 확인 후 설치 파일을 내려받아 Orbit을 종료 → 설치 → 자동 재실행합니다. 실행 중인 터미널은 종료되므로 작업이 끝난 뒤에 누르세요.
+
+새 버전 배포: `v0.2.0` 같은 태그를 push하면 GitHub Actions가 빌드해 릴리스에 `Orbit-Setup.exe`를 올립니다(`git tag v0.2.0 && git push origin v0.2.0`). main에 push할 때는 빌드만 검증하고 릴리스는 만들지 않습니다.
+
 ## 실행
 
 빌드된 실행 파일은 `release/Orbit/Orbit.exe`입니다. 배포할 때는 `release/Orbit` 폴더 전체를 복사하세요. 개발 도구와 `node_modules`는 앱 실행에 필요하지 않습니다.
@@ -90,6 +98,9 @@ npm run preview
 | `src/editor.js` | 필요할 때 불러오는 CodeMirror 편집기 |
 | `cloud/` | 계정 로그인용 Cloudflare Worker(신호 서버) — 자세한 내용은 `cloud/wrangler.toml` 참고 |
 | `scripts/build.ps1` | Windows 실행 파일 빌드 |
+| `native/Updater.cs` | GitHub 릴리스 확인과 업데이트 설치 |
+| `installer/orbit.iss` | 설치 프로그램(Inno Setup) 정의 |
+| `.github/workflows/build.yml` | CI 빌드와 태그 릴리스 |
 
 ## 기술 문서
 
