@@ -281,7 +281,8 @@ async function openResumePicker(provider) {
   dialog(`${profiles[provider].name} 대화`,node=>{node.append(el('p','dialog-note','원래 작업 폴더에서 이어서 엽니다.'));for(const item of rows)node.append(button(item.title,'command-item',guard(async()=>{$('#modal').close();await resumeSavedSession(item);})));node.append(button(`새 ${profiles[provider].name} 세션`,'secondary',guard(async()=>{$('#modal').close();await newTerminal(provider);})));});
 }
 async function resumeSavedSession(item) {const open=state.terminals.find(t=>t.profile===item.provider&&t.resumeId===item.id&&!t.pane.exited);if(open){activateTerminal(open.id);open.pane.focus();return;}await newTerminal(item.provider,{resumeId:item.id,cwd:item.cwd,title:item.title});}
-function persist() { return call('settings', state.settings).catch(e => toast(e.message, true)); }
+// A client session browses the host's paths, which must not end up in this PC's own recent-project settings.
+function persist() { if (state.client) return Promise.resolve(); return call('settings', state.settings).catch(e => toast(e.message, true)); }
 function matchesProject(left, right) { return typeof left === 'string' && typeof right === 'string' && left.toLowerCase() === right.toLowerCase(); }
 function visibleProjects() {
   if (state.client) return state.client.projects.map(item => item.path).slice(0, 8);
@@ -633,15 +634,19 @@ function enterClientMode(result,emailValue){
   document.body.classList.add('client-mode');showHome();
 }
 async function leaveClientMode(){
+  // Re-read the saved settings: the in-memory copy picked up the host's project paths during the session.
+  try{const saved=(await call('init')).settings||{};saved.remoteClientAuto=false;await call('settings',saved);}catch{}
   await call('remoteClientLogout').catch(()=>{});
-  state.client=null;state.settings.remoteClientAuto=false;persist();document.body.classList.remove('client-mode');renderHomeOrbit();showLoginScreen();
+  location.reload();
 }
 async function refreshClientProjects(){
   try{enterClientMode(await call('remoteClientProjects'),state.client?.email);}
   catch(e){toast(e.message,true);}
 }
-const openProject = path => state.client ? call('remoteClientOpen',{project:path}) : setFolder(path);
+// In client mode the workspace is this same UI; its file and terminal calls are forwarded to the host by the native side.
+const openProject = path => setFolder(path);
 async function remoteDevices(){
+  if(state.client){toast('호스트에 접속 중에는 외부 연결 설정을 열 수 없습니다.');return;}
   let status=await call('remoteStatus'),tunnel=await call('remoteTunnelStatus').catch(()=>({})),tailscale=await call('remoteTailscaleStatus').catch(()=>({})),account=await call('accountStatus').catch(()=>({})),connecting=false,closed=false,connectionError=tailscale.error||tunnel.error||'',accountBusy=false,accountError=account.error||'';
   let render=()=>{};const merge=result=>{if(result&&result.status)status=result.status;if(result&&result.tunnel)tunnel=result.tunnel;if(result&&result.tailscale)tailscale=result.tailscale;};
   const unsub=on('remoteStatus',data=>{if(!closed){status=data.status;render();}});

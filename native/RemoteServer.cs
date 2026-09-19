@@ -13,7 +13,7 @@ namespace Orbit {
  internal sealed class RemoteServer:IDisposable {
   HttpListener listener=new HttpListener(); readonly IRemoteTerminals terminals; readonly JavaScriptSerializer json=new JavaScriptSerializer {MaxJsonLength=2*1024*1024};
   readonly ConcurrentDictionary<string,Device> devices=new ConcurrentDictionary<string,Device>(); readonly ConcurrentDictionary<string,Rate> rates=new ConcurrentDictionary<string,Rate>(); readonly ConcurrentDictionary<string,Receipt> receipts=new ConcurrentDictionary<string,Receipt>(); readonly string serverEpoch=Guid.NewGuid().ToString("N");
-  readonly string deviceFile; readonly object lifecycle=new object(),persistence=new object(); bool running; int active; long rateSweepTicks; const int MaxBody=65536,MaxClients=12;
+  readonly string deviceFile; readonly object lifecycle=new object(),persistence=new object(); bool running; int active; long rateSweepTicks; const int MaxBody=65536,DeskMaxBody=1900000,MaxClients=12;
   sealed class Device {public string Hash,Name;public DateTime Added;}
   sealed class Rate {public DateTime Window=DateTime.UtcNow;public int Count;}
   sealed class Receipt {public string Session,Payload;public DateTime Expires;public volatile int State;}
@@ -40,9 +40,13 @@ namespace Orbit {
    Security(c);if(!AllowedOrigin(c)){Reply(c,403,new {error="origin not allowed"});return;}
    string path=c.Request.Url.AbsolutePath;if(!path.StartsWith("/api/v1/",StringComparison.Ordinal)){Static(c,path);return;}
    if(c.Request.HttpMethod!="POST"){Reply(c,405,new {error="POST required"});return;}
-   Dictionary<string,object>a=Parse(Body(c));string op=path.Substring(8).Trim('/');
-   Device device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}
-   if(!RateOk("device:"+device.Hash,900)){Reply(c,429,new {error="rate limited"});return;}
+   string op=path.Substring(8).Trim('/');bool desk=op.StartsWith("desk/",StringComparison.Ordinal);
+   Dictionary<string,object>a;Device device;
+   // Desktop-bridge bodies may carry file contents, so authenticate before accepting the larger body.
+   if(desk){device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}a=Parse(Body(c,DeskMaxBody));}
+   else{a=Parse(Body(c));device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}}
+   if(!RateOk("device:"+device.Hash,desk?6000:900)){Reply(c,429,new {error="rate limited"});return;}
+   if(desk){DeskRoute(c,a,op,device);return;}
    if(op=="sessions"){Reply(c,200,WithEpoch(terminals.Sessions()));return;}
    if(op=="saved-sessions"){Reply(c,200,WithEpoch(terminals.SavedSessions()));return;}
    if(op=="saved-sessions/delete"){string provider=S(a,"provider"),id=S(a,"id");if((provider!="codex"&&provider!="claude")||!SessionHistory.IsCanonicalId(id)){Reply(c,400,new {error="invalid saved session"});return;}Reply(c,200,WithEpoch(terminals.DeleteSavedSession(provider,id)));return;}
@@ -52,6 +56,14 @@ namespace Orbit {
    if(op=="output"){object value=terminals.Output(S(a,"session"),L(a,"seq"),25000);if(Auth(c)==null){Reply(c,401,new {error="revoked"});return;}Reply(c,200,WithEpoch(value));return;}
    if(op=="input/status"){InputStatus(c,a,device);return;}
    if(op=="input"){Input(c,a,device);return;}
+   Reply(c,404,new {error="unknown api"});
+  }
+  void DeskRoute(HttpListenerContext c,Dictionary<string,object> a,string op,Device device){
+   var bridge=terminals as IDeskBridge;if(bridge==null){Reply(c,404,new {error="unknown api"});return;}
+   if(op=="desk/call"){
+    try{var args=a.ContainsKey("args")?a["args"] as Dictionary<string,object>:null;Reply(c,200,new {result=bridge.DeskCall(device.Hash,S(a,"method"),args)});}
+    catch(Exception ex){Reply(c,200,new {error=ex.Message});}return;}
+   if(op=="desk/events"){object value=bridge.DeskEvents(device.Hash,L(a,"after"),25000);if(Auth(c)==null){Reply(c,401,new {error="revoked"});return;}Reply(c,200,value);return;}
    Reply(c,404,new {error="unknown api"});
   }
   object WithEpoch(object value){var map=json.Deserialize<Dictionary<string,object>>(json.Serialize(value))??new Dictionary<string,object>();map["serverEpoch"]=serverEpoch;return map;}
@@ -65,7 +77,7 @@ namespace Orbit {
   void Static(HttpListenerContext c,string p){if(c.Request.HttpMethod!="GET"&&c.Request.HttpMethod!="HEAD"){Reply(c,405,new {error="GET required"});return;}if(p=="/")p="/mobile.html";bool allowed=p=="/mobile.html"||p=="/mobile.js"||p=="/mobile.css"||p=="/mobile.webmanifest"||p=="/mobile-sw.js"||p=="/orbit.svg"||p=="/orbit-180.png"||p=="/orbit-192.png"||p=="/orbit-512.png"||(p.StartsWith("/chunks/",StringComparison.Ordinal)&&!p.Contains(".."));if(!allowed){Reply(c,404,new {error="not found"});return;}string file=Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"web",p.TrimStart('/').Replace('/','\\'))),root=Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"web"));if(!file.StartsWith(root+"\\",StringComparison.OrdinalIgnoreCase)||!File.Exists(file)){Reply(c,404,new {error="not found"});return;}string ext=Path.GetExtension(file).ToLowerInvariant();if(ext!=".html"&&ext!=".js"&&ext!=".css"&&ext!=".webmanifest"&&ext!=".svg"&&ext!=".png"){Reply(c,404,new {error="not found"});return;}c.Response.ContentType=ext==".js"?"text/javascript":ext==".css"?"text/css":ext==".webmanifest"?"application/manifest+json":ext==".svg"?"image/svg+xml":ext==".png"?"image/png":"text/html";c.Response.Headers["Cache-Control"]="no-store";if(c.Request.HttpMethod=="GET"){byte[]b=File.ReadAllBytes(file);c.Response.OutputStream.Write(b,0,b.Length);}c.Response.Close();}
   static void Security(HttpListenerContext c){c.Response.Headers["Cache-Control"]="no-store, max-age=0";c.Response.Headers["Pragma"]="no-cache";c.Response.Headers["X-Content-Type-Options"]="nosniff";c.Response.Headers["X-Frame-Options"]="DENY";c.Response.Headers["Referrer-Policy"]="no-referrer";c.Response.Headers["Content-Security-Policy"]="default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";}
   static Dictionary<string,object> Parse(string text){try{return new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(text)??new Dictionary<string,object>();}catch{throw new InvalidOperationException("invalid JSON");}}
-  static string Body(HttpListenerContext c){if(!String.Equals(c.Request.ContentType??"","application/json",StringComparison.OrdinalIgnoreCase)||c.Request.ContentLength64<2||c.Request.ContentLength64>MaxBody)throw new InvalidOperationException("invalid request body");using(var r=new StreamReader(c.Request.InputStream,Encoding.UTF8,false,MaxBody)){string s=r.ReadToEnd();if(Encoding.UTF8.GetByteCount(s)>MaxBody)throw new InvalidOperationException("request too large");return s;}}
+  static string Body(HttpListenerContext c,int limit=MaxBody){if(!String.Equals(c.Request.ContentType??"","application/json",StringComparison.OrdinalIgnoreCase)||c.Request.ContentLength64<2||c.Request.ContentLength64>limit)throw new InvalidOperationException("invalid request body");using(var r=new StreamReader(c.Request.InputStream,Encoding.UTF8,false,limit)){string s=r.ReadToEnd();if(Encoding.UTF8.GetByteCount(s)>limit)throw new InvalidOperationException("request too large");return s;}}
   void Reply(HttpListenerContext c,int status,object value){byte[]b=Encoding.UTF8.GetBytes(json.Serialize(value));c.Response.StatusCode=status;c.Response.ContentType="application/json; charset=utf-8";c.Response.ContentLength64=b.Length;c.Response.OutputStream.Write(b,0,b.Length);c.Response.Close();}
   bool RateOk(string key,int limit){SweepRatesIfDue();Rate r=rates.GetOrAdd(key,_=>new Rate());lock(r){if((DateTime.UtcNow-r.Window).TotalMinutes>=1){r.Window=DateTime.UtcNow;r.Count=0;}return ++r.Count<=limit;}}
   void SweepRatesIfDue(){long now=DateTime.UtcNow.Ticks,last=Interlocked.Read(ref rateSweepTicks);if(now-last<TimeSpan.FromMinutes(5).Ticks||Interlocked.CompareExchange(ref rateSweepTicks,now,last)!=last)return;DateTime cutoff=DateTime.UtcNow.AddMinutes(-5);foreach(var pair in rates)if(pair.Value.Window<cutoff){Rate removed;rates.TryRemove(pair.Key,out removed);}}

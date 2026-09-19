@@ -23,7 +23,7 @@ namespace Orbit {
             Application.Run(new MainWindow(args));return Environment.ExitCode;
         }
     }
-    internal sealed class MainWindow : Form, IRemoteTerminals {
+    internal sealed partial class MainWindow : Form, IRemoteTerminals, IDeskBridge {
         private readonly WebView2 web=new WebView2();
         private readonly WindowChrome chrome;
         private CoreWebView2Environment environment;
@@ -144,126 +144,136 @@ namespace Orbit {
                 var request=json.Deserialize<Dictionary<string,object>>(e.WebMessageAsJson);
                 id=N(request,"id");string method=S(request,"method");
                 var a=request.ContainsKey("args")?request["args"] as Dictionary<string,object>:new Dictionary<string,object>();
-                object result=null;
-                switch(method) {
-                    case "init": result=new { folder=initialFolder,version=Updater.CurrentText(),settings=LoadSettings(),testMode=uiTest||remoteTest };break;
-                    case "pickerPlaces":result=await Task.Run(()=>Files.PickerPlaces());break;
-                    case "browse":result=await Task.Run(()=>Files.Browse(S(a,"path",initialFolder),S(a,"hidden")=="True",S(a,"directoriesOnly")=="True"));break;
-                    case "createFile":result=await Task.Run(()=>Files.CreateFile(S(a,"path")));break;
-                    case "list":result=await Task.Run(()=>Files.List(S(a,"path"),S(a,"hidden")=="True"));break;
-                    case "read":result=await Task.Run(()=>Files.Read(Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder))));break;
-                    case "save":result=await Task.Run(()=>Files.Save(S(a,"path"),S(a,"content"),S(a,"encoding"),S(a,"revision",null)));break;
-                    case "stat": {string p=Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder));result=new { path=p,directory=Directory.Exists(p),exists=Directory.Exists(p)||File.Exists(p) };break;}
-                    case "external":OpenExternal(S(a,"path"),S(a,"cwd",initialFolder));break;
-                    case "clipboard":Clipboard.SetText(S(a,"text"));break;
-                    case "clipboardRead":result=Clipboard.ContainsText()?Clipboard.GetText():"";break;
-                    case "windowMinimize":chrome.Minimize();break;
-                    case "windowMaximize":chrome.ToggleMaximize();break;
-                    case "windowClose":chrome.CloseWindow();break;
-                    case "dirty":dirty=S(a,"value")=="True";break;
-                    case "settings":File.WriteAllText(Path.Combine(dataRoot,"settings.json"),json.Serialize(a));break;
-                    case "theme":ApplyHostTheme(S(a,"value"));break;
-                    case "savedSessions": {
-                        long savedRequest=Interlocked.Increment(ref savedSessionRequest);
-                        string workspace=S(a,"cwd",initialFolder); var saved=await Task.Run(()=>SessionHistory.List(workspace,S(a,"allWorkspaces")=="True"));
-                        // Browser requests can finish out of order while a folder changes.
-                        // Keep the cache that corresponds to the newest displayed list.
-                        if(savedRequest==Interlocked.Read(ref savedSessionRequest)) { savedSessions.Clear(); foreach(var item in saved)savedSessions[item.Provider+":"+item.Id]=item; }
-                        result=new {sessions=saved.Select(x=>new {provider=x.Provider,id=x.Id,title=x.Title,cwd=x.Cwd,updated=x.Updated.ToString("o")}).ToArray()};break;
-                    }
-                    case "createTerminal": {
-                        string sid=S(a,"session");
-                        if(string.IsNullOrWhiteSpace(sid))throw new InvalidOperationException("터미널 식별자가 없습니다.");
-                        if(sessions.Count+pendingTerminals.Count>=8)throw new InvalidOperationException("동시에 8개까지 터미널을 열 수 있습니다.");
-                        if(sessions.ContainsKey(sid) || !pendingTerminals.Add(sid))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");
-                        try {
-                        string cwd=S(a,"cwd",initialFolder),profile=S(a,"profile","powershell"),resumeId=S(a,"resumeId");
-                        if(profile!="codex"&&profile!="claude"&&profile!="powershell"&&profile!="cmd")throw new InvalidOperationException("Unsupported terminal profile.");
-                        if(!String.IsNullOrEmpty(resumeId)) {
-                            if((profile!="codex"&&profile!="claude")||!SessionHistory.IsId(resumeId))throw new InvalidOperationException("Invalid saved session.");
-                            SavedSession saved;if(!savedSessions.TryGetValue(profile+":"+resumeId,out saved))throw new InvalidOperationException("Refresh saved sessions before resuming.");
-                            cwd=saved.Cwd;
-                        }
-                        if(!Directory.Exists(cwd))throw new DirectoryNotFoundException("작업 폴더를 찾을 수 없습니다.");
-                        string shell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe");
-                        string command="\""+shell+"\" -NoLogo -NoProfile -NoExit";
-                        if(profile=="cmd")command="\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d";
-                        else {
-                            string script="[Console]::InputEncoding = New-Object System.Text.UTF8Encoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'; ";
-                            if(profile=="codex" || profile=="claude") {
-                                if(String.IsNullOrEmpty(resumeId))script+="if (Get-Command "+profile+" -ErrorAction SilentlyContinue) { "+profile+" } else { Write-Host '"+profile+" CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
-                                else if(profile=="codex")script+="if (Get-Command codex -ErrorAction SilentlyContinue) { codex -C '"+cwd.Replace("'","''")+"' resume "+resumeId+" } else { Write-Host 'codex CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
-                                else script+="if (Get-Command claude -ErrorAction SilentlyContinue) { claude --resume "+resumeId+" } else { Write-Host 'claude CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
-                            }
-                            command+=" -EncodedCommand "+Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
-                        }
-                        outputRings[sid]=new OutputRing();
-                        var terminal=new ConPty(sid,cwd,command,N(a,"cols",100),N(a,"rows",30),(key,chunk)=>{long seq=RecordOutput(key,chunk);Send(new {type="output",session=key,data=chunk,seq=seq});},(key,code)=> {
-                            if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();Send(new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
-                        });
-                        if(!sessions.TryAdd(sid,terminal))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");sessionProfiles[sid]=profile;if(!String.IsNullOrEmpty(resumeId))sessionResumeIds[sid]=profile+":"+resumeId;sessionNames[sid]=TerminalName(S(a,"name"),profile);terminal.Start();result=new {pid=terminal.ProcessId};
-                        } finally { pendingTerminals.Remove(sid); }
-                        break;
-                    }
-                    case "write":GetSession(S(a,"session")).Write(S(a,"data"));break;
-                    case "ack": {ConPty terminal;if(sessions.TryGetValue(S(a,"session"),out terminal))terminal.Acknowledge();break;}
-                    case "resize":GetSession(S(a,"session")).Resize(N(a,"cols",80),N(a,"rows",24));break;
-                    case "closeTerminal": {string key=S(a,"session");ConPty terminal;if(sessions.TryRemove(key,out terminal)){string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();terminal.Dispose();}break;}
-                    case "deleteSavedSession": result=await Task.Run(()=>DeleteSavedSession(S(a,"provider"),S(a,"id"),S(a,"cwd",initialFolder),S(a,"allWorkspaces")=="True"));break;
-                    case "terminalName": {string key=S(a,"session"),name=S(a,"name");if(sessions.ContainsKey(key))sessionNames[key]=TerminalName(name,"terminal");break;}
-                    case "metrics":result=await Task.Run(()=>Measure());break;
-                    case "remoteStatus":result=remote.Status();break;
-                    case "remoteStart":result=new {url=remote.Start(N(a,"port",49821))};break;
-                    case "remoteStop":tunnel.Stop();tailscale.Stop();remote.Stop();ClearRemoteRings();result=remote.Status();break;
-                    case "remoteTunnelStart": tailscale.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));tunnel.Start(remote.Port);result=new {status=remote.Status(),tunnel=tunnel.Status(),tailscale=tailscale.Status()};break;
-                    case "remoteTunnelStatus":result=tunnel.Status();break;
-                    case "remoteTailscaleStatus":result=tailscale.Status();break;
-                    case "remoteTailscaleLogin":result=await Task.Run(()=>tailscale.Login());break;
-                    case "remoteTailscaleStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
-                    case "remoteConnectStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));if(!remote.Url().StartsWith("https:",StringComparison.OrdinalIgnoreCase))await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
-                    case "remoteTunnelStop":tunnel.Stop();result=remote.Status();break;
-                    case "remotePublicOrigin":configuredRemoteOrigin=S(a,"url");RefreshRemoteOrigin();result=remote.Status();break;
-                    case "updateCheck": {var check=await Task.Run(()=>Updater.Check());try{File.WriteAllText(Path.Combine(dataRoot,"update-check.log"),DateTime.Now.ToString("s")+" "+json.Serialize(check)+Environment.NewLine);}catch{}result=check;break;}
-                    case "updateInstall":await Task.Run(()=>Updater.DownloadAndLaunch());result=new {ok=true};quitting=true;BeginInvoke(new Action(Close));break;
-                    case "accountStatus":result=account.Status();break;
-                    case "accountServiceUrl":account.ServiceUrl=S(a,"url");result=account.Status();break;
-                    case "accountSignUp":result=await Task.Run(()=>account.SignUp(S(a,"email"),S(a,"password")));break;
-                    case "accountLink":result=await Task.Run(()=>account.Link(S(a,"email"),S(a,"password")));break;
-                    case "accountUnlink":result=await Task.Run(()=>account.Unlink());break;
-                    case "remoteClientLogin":{
-                        var session=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));
-                        var list=await Task.Run(()=>RemoteClientWindow.Projects(session));
-                        clientSession=session;
-                        if(a.ContainsKey("remember")&&Convert.ToBoolean(a["remember"]))ClientCredentials.Save(ClientLoginFile,S(a,"url"),S(a,"email"),S(a,"password"));else ClientCredentials.Delete(ClientLoginFile);
-                        result=list;break;
-                    }
-                    case "remoteClientAuto":{
-                        var saved=ClientCredentials.Load(ClientLoginFile);
-                        if(saved==null){result=new {available=false};break;}
-                        string savedEmail=Convert.ToString(saved["email"]);
-                        try {
-                            var session=await Task.Run(()=>RemoteClientWindow.Login(Convert.ToString(saved["url"]),savedEmail,Convert.ToString(saved["password"])));
-                            var list=(Dictionary<string,object>)await Task.Run(()=>RemoteClientWindow.Projects(session));
-                            clientSession=session;list["available"]=true;list["email"]=savedEmail;result=list;
-                        } catch(Exception ex) {
-                            // A wrong password will never start working by itself, so forget it; a network failure keeps it for the next launch.
-                            if(ex.Message==ClientCredentials.InvalidCredentials)ClientCredentials.Delete(ClientLoginFile);
-                            result=new {available=true,email=savedEmail,error=ex.Message};
-                        }
-                        break;
-                    }
-                    case "remoteClientOpen":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");RemoteClientWindow.Open(clientSession.MobileUrl(S(a,"project")),environment,Icon);result=new {ok=true};break;
-                    case "remoteClientProjects":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");result=await Task.Run(()=>RemoteClientWindow.Projects(clientSession));break;
-                    case "remoteClientLogout":clientSession=null;ClientCredentials.Delete(ClientLoginFile);RemoteClientWindow.CloseCurrent();result=new {ok=true};break;
-                    case "remoteTailscaleSetup":OpenTailscaleSetup(S(a,"url"));result=new {ok=true};break;
-                    case "remoteDiagnostic":result=await Task.Run(()=>RemoteDiagnostic());break;
-                    case "remoteSnapshot": { RemoteSnapshot snapshot; string key=S(a,"request"); if(remoteSnapshots.TryGetValue(key,out snapshot)){snapshot.Data=S(a,"data");snapshot.Seq=L(a,"seq");snapshot.Cols=N(a,"cols");snapshot.Rows=N(a,"rows");try{snapshot.Ready.Set();}catch(ObjectDisposedException){}}break; }
-                    case "remoteCreate": { RemoteCreate creationRequest;string key=S(a,"request");if(remoteCreates.TryGetValue(key,out creationRequest)){creationRequest.Session=S(a,"session");creationRequest.Error=S(a,"error");try{creationRequest.Ready.Set();}catch(ObjectDisposedException){}}break; }
-                    case "remoteProjects": { RemoteProjects projectsRequest;string key=S(a,"request");if(remoteProjectsRequests.TryGetValue(key,out projectsRequest)){projectsRequest.List=a.ContainsKey("projects")?a["projects"]:new object[0];projectsRequest.Current=S(a,"current");try{projectsRequest.Ready.Set();}catch(ObjectDisposedException){}}break; }
-                    default:throw new InvalidOperationException("지원하지 않는 요청입니다.");
-                }
+                object result=await Dispatch(method,a,null);
                 if(id!=0)Send(new {id=id,result=result});
             }catch(Exception ex) {if(id!=0)Send(new {id=id,error=ex.Message});else Send(new {type="error",message=ex.Message});}
+        }
+        // Shared by the local UI (owner==null) and remote desktop clients (owner==device id).
+        private async Task<object> Dispatch(string method,Dictionary<string,object> a,string owner) {
+            object result=null;
+            if(owner==null&&clientSession!=null) { if(method=="ack")return null; if(DeskForward.Contains(method))return await DeskForwardCall(method,a); }
+            if(owner!=null) {
+                if(method=="ack")return null; // remote output is drained by the host itself, see DeskAfterOutput
+                if(method=="write"||method=="resize"||method=="closeTerminal"||method=="terminalName") { string own;if(!sessionOwners.TryGetValue(S(a,"session"),out own)||own!=owner)throw new InvalidOperationException("이 원격 클라이언트의 터미널이 아닙니다."); }
+            }
+            switch(method) {
+                case "init": result=new { folder=initialFolder,version=Updater.CurrentText(),settings=LoadSettings(),testMode=uiTest||remoteTest };break;
+                case "pickerPlaces":result=await Task.Run(()=>Files.PickerPlaces());break;
+                case "browse":result=await Task.Run(()=>Files.Browse(S(a,"path",initialFolder),S(a,"hidden")=="True",S(a,"directoriesOnly")=="True"));break;
+                case "createFile":result=await Task.Run(()=>Files.CreateFile(S(a,"path")));break;
+                case "list":result=await Task.Run(()=>Files.List(S(a,"path"),S(a,"hidden")=="True"));break;
+                case "read":result=await Task.Run(()=>Files.Read(Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder))));break;
+                case "save":result=await Task.Run(()=>Files.Save(S(a,"path"),S(a,"content"),S(a,"encoding"),S(a,"revision",null)));break;
+                case "stat": {string p=Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder));result=new { path=p,directory=Directory.Exists(p),exists=Directory.Exists(p)||File.Exists(p) };break;}
+                case "external":OpenExternal(S(a,"path"),S(a,"cwd",initialFolder));break;
+                case "clipboard":Clipboard.SetText(S(a,"text"));break;
+                case "clipboardRead":result=Clipboard.ContainsText()?Clipboard.GetText():"";break;
+                case "windowMinimize":chrome.Minimize();break;
+                case "windowMaximize":chrome.ToggleMaximize();break;
+                case "windowClose":chrome.CloseWindow();break;
+                case "dirty":dirty=S(a,"value")=="True";break;
+                case "settings":File.WriteAllText(Path.Combine(dataRoot,"settings.json"),json.Serialize(a));break;
+                case "theme":ApplyHostTheme(S(a,"value"));break;
+                case "savedSessions": {
+                    long savedRequest=Interlocked.Increment(ref savedSessionRequest);
+                    string workspace=S(a,"cwd",initialFolder); var saved=await Task.Run(()=>SessionHistory.List(workspace,S(a,"allWorkspaces")=="True"));
+                    // Browser requests can finish out of order while a folder changes.
+                    // Keep the cache that corresponds to the newest displayed list.
+                    if(savedRequest==Interlocked.Read(ref savedSessionRequest)) { savedSessions.Clear(); foreach(var item in saved)savedSessions[item.Provider+":"+item.Id]=item; }
+                    result=new {sessions=saved.Select(x=>new {provider=x.Provider,id=x.Id,title=x.Title,cwd=x.Cwd,updated=x.Updated.ToString("o")}).ToArray()};break;
+                }
+                case "createTerminal": {
+                    string sid=S(a,"session");
+                    if(string.IsNullOrWhiteSpace(sid))throw new InvalidOperationException("터미널 식별자가 없습니다.");
+                    if(sessions.Count+pendingTerminals.Count>=8)throw new InvalidOperationException("동시에 8개까지 터미널을 열 수 있습니다.");
+                    if(sessions.ContainsKey(sid) || !pendingTerminals.Add(sid))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");
+                    try {
+                    string cwd=S(a,"cwd",initialFolder),profile=S(a,"profile","powershell"),resumeId=S(a,"resumeId");
+                    if(profile!="codex"&&profile!="claude"&&profile!="powershell"&&profile!="cmd")throw new InvalidOperationException("Unsupported terminal profile.");
+                    if(!String.IsNullOrEmpty(resumeId)) {
+                        if((profile!="codex"&&profile!="claude")||!SessionHistory.IsId(resumeId))throw new InvalidOperationException("Invalid saved session.");
+                        SavedSession saved;if(!savedSessions.TryGetValue(profile+":"+resumeId,out saved))throw new InvalidOperationException("Refresh saved sessions before resuming.");
+                        cwd=saved.Cwd;
+                    }
+                    if(!Directory.Exists(cwd))throw new DirectoryNotFoundException("작업 폴더를 찾을 수 없습니다.");
+                    string shell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe");
+                    string command="\""+shell+"\" -NoLogo -NoProfile -NoExit";
+                    if(profile=="cmd")command="\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d";
+                    else {
+                        string script="[Console]::InputEncoding = New-Object System.Text.UTF8Encoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'; ";
+                        if(profile=="codex" || profile=="claude") {
+                            if(String.IsNullOrEmpty(resumeId))script+="if (Get-Command "+profile+" -ErrorAction SilentlyContinue) { "+profile+" } else { Write-Host '"+profile+" CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
+                            else if(profile=="codex")script+="if (Get-Command codex -ErrorAction SilentlyContinue) { codex -C '"+cwd.Replace("'","''")+"' resume "+resumeId+" } else { Write-Host 'codex CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
+                            else script+="if (Get-Command claude -ErrorAction SilentlyContinue) { claude --resume "+resumeId+" } else { Write-Host 'claude CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
+                        }
+                        command+=" -EncodedCommand "+Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+                    }
+                    outputRings[sid]=new OutputRing();if(owner!=null)sessionOwners[sid]=owner;
+                    var terminal=new ConPty(sid,cwd,command,N(a,"cols",100),N(a,"rows",30),(key,chunk)=>{long seq=RecordOutput(key,chunk);EmitOutput(key,new {type="output",session=key,data=chunk,seq=seq},chunk.Length);},(key,code)=> {
+                        if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { string exitOwner;sessionOwners.TryRemove(key,out exitOwner);ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();EmitTo(exitOwner,new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
+                    });
+                    if(!sessions.TryAdd(sid,terminal))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");sessionProfiles[sid]=profile;if(!String.IsNullOrEmpty(resumeId))sessionResumeIds[sid]=profile+":"+resumeId;sessionNames[sid]=TerminalName(S(a,"name"),profile);terminal.Start();result=new {pid=terminal.ProcessId};
+                    } finally { pendingTerminals.Remove(sid);if(!sessions.ContainsKey(sid)){string failedOwner;sessionOwners.TryRemove(sid,out failedOwner);} }
+                    break;
+                }
+                case "write":GetSession(S(a,"session")).Write(S(a,"data"));break;
+                case "ack": {ConPty terminal;if(sessions.TryGetValue(S(a,"session"),out terminal))terminal.Acknowledge();break;}
+                case "resize":GetSession(S(a,"session")).Resize(N(a,"cols",80),N(a,"rows",24));break;
+                case "closeTerminal": {string key=S(a,"session");ConPty terminal;if(sessions.TryRemove(key,out terminal)){string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();terminal.Dispose();}break;}
+                case "deleteSavedSession": result=await Task.Run(()=>DeleteSavedSession(S(a,"provider"),S(a,"id"),S(a,"cwd",initialFolder),S(a,"allWorkspaces")=="True"));break;
+                case "terminalName": {string key=S(a,"session"),name=S(a,"name");if(sessions.ContainsKey(key))sessionNames[key]=TerminalName(name,"terminal");break;}
+                case "metrics":result=await Task.Run(()=>Measure());break;
+                case "remoteStatus":result=remote.Status();break;
+                case "remoteStart":result=new {url=remote.Start(N(a,"port",49821))};break;
+                case "remoteStop":tunnel.Stop();tailscale.Stop();remote.Stop();ClearRemoteRings();result=remote.Status();break;
+                case "remoteTunnelStart": tailscale.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));tunnel.Start(remote.Port);result=new {status=remote.Status(),tunnel=tunnel.Status(),tailscale=tailscale.Status()};break;
+                case "remoteTunnelStatus":result=tunnel.Status();break;
+                case "remoteTailscaleStatus":result=tailscale.Status();break;
+                case "remoteTailscaleLogin":result=await Task.Run(()=>tailscale.Login());break;
+                case "remoteTailscaleStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
+                case "remoteConnectStart":tunnel.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));if(!remote.Url().StartsWith("https:",StringComparison.OrdinalIgnoreCase))await Task.Run(()=>tailscale.Start(remote.Port));result=new {status=remote.Status(),tailscale=tailscale.Status(),tunnel=tunnel.Status()};break;
+                case "remoteTunnelStop":tunnel.Stop();result=remote.Status();break;
+                case "remotePublicOrigin":configuredRemoteOrigin=S(a,"url");RefreshRemoteOrigin();result=remote.Status();break;
+                case "updateCheck": {var check=await Task.Run(()=>Updater.Check());try{File.WriteAllText(Path.Combine(dataRoot,"update-check.log"),DateTime.Now.ToString("s")+" "+json.Serialize(check)+Environment.NewLine);}catch{}result=check;break;}
+                case "updateInstall":await Task.Run(()=>Updater.DownloadAndLaunch());result=new {ok=true};quitting=true;BeginInvoke(new Action(Close));break;
+                case "accountStatus":result=account.Status();break;
+                case "accountServiceUrl":account.ServiceUrl=S(a,"url");result=account.Status();break;
+                case "accountSignUp":result=await Task.Run(()=>account.SignUp(S(a,"email"),S(a,"password")));break;
+                case "accountLink":result=await Task.Run(()=>account.Link(S(a,"email"),S(a,"password")));break;
+                case "accountUnlink":result=await Task.Run(()=>account.Unlink());break;
+                case "remoteClientLogin":{
+                    var session=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));
+                    var list=await Task.Run(()=>RemoteClientWindow.Projects(session));
+                    clientSession=session;StartDeskEvents();
+                    if(a.ContainsKey("remember")&&Convert.ToBoolean(a["remember"]))ClientCredentials.Save(ClientLoginFile,S(a,"url"),S(a,"email"),S(a,"password"));else ClientCredentials.Delete(ClientLoginFile);
+                    result=list;break;
+                }
+                case "remoteClientAuto":{
+                    var saved=ClientCredentials.Load(ClientLoginFile);
+                    if(saved==null){result=new {available=false};break;}
+                    string savedEmail=Convert.ToString(saved["email"]);
+                    try {
+                        var session=await Task.Run(()=>RemoteClientWindow.Login(Convert.ToString(saved["url"]),savedEmail,Convert.ToString(saved["password"])));
+                        var list=(Dictionary<string,object>)await Task.Run(()=>RemoteClientWindow.Projects(session));
+                        clientSession=session;StartDeskEvents();list["available"]=true;list["email"]=savedEmail;result=list;
+                    } catch(Exception ex) {
+                        // A wrong password will never start working by itself, so forget it; a network failure keeps it for the next launch.
+                        if(ex.Message==ClientCredentials.InvalidCredentials)ClientCredentials.Delete(ClientLoginFile);
+                        result=new {available=true,email=savedEmail,error=ex.Message};
+                    }
+                    break;
+                }
+                case "remoteClientOpen":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");RemoteClientWindow.Open(clientSession.MobileUrl(S(a,"project")),environment,Icon);result=new {ok=true};break;
+                case "remoteClientProjects":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");result=await Task.Run(()=>RemoteClientWindow.Projects(clientSession));break;
+                case "remoteClientLogout":StopDeskEvents();clientSession=null;ClientCredentials.Delete(ClientLoginFile);RemoteClientWindow.CloseCurrent();result=new {ok=true};break;
+                case "remoteTailscaleSetup":OpenTailscaleSetup(S(a,"url"));result=new {ok=true};break;
+                case "remoteDiagnostic":result=await Task.Run(()=>RemoteDiagnostic());break;
+                case "remoteSnapshot": { RemoteSnapshot snapshot; string key=S(a,"request"); if(remoteSnapshots.TryGetValue(key,out snapshot)){snapshot.Data=S(a,"data");snapshot.Seq=L(a,"seq");snapshot.Cols=N(a,"cols");snapshot.Rows=N(a,"rows");try{snapshot.Ready.Set();}catch(ObjectDisposedException){}}break; }
+                case "remoteCreate": { RemoteCreate creationRequest;string key=S(a,"request");if(remoteCreates.TryGetValue(key,out creationRequest)){creationRequest.Session=S(a,"session");creationRequest.Error=S(a,"error");try{creationRequest.Ready.Set();}catch(ObjectDisposedException){}}break; }
+                case "remoteProjects": { RemoteProjects projectsRequest;string key=S(a,"request");if(remoteProjectsRequests.TryGetValue(key,out projectsRequest)){projectsRequest.List=a.ContainsKey("projects")?a["projects"]:new object[0];projectsRequest.Current=S(a,"current");try{projectsRequest.Ready.Set();}catch(ObjectDisposedException){}}break; }
+                default:throw new InvalidOperationException("지원하지 않는 요청입니다.");
+            }
+            return result;
         }
         private ConPty GetSession(string id) {ConPty value;if(!sessions.TryGetValue(id,out value))throw new InvalidOperationException("종료된 터미널입니다.");return value;}
         private static int RemoteTestPort(string[] args) { string value=args.FirstOrDefault(x=>x.StartsWith("--remote-test-port=",StringComparison.OrdinalIgnoreCase));int port;if(value!=null&&Int32.TryParse(value.Substring("--remote-test-port=".Length),out port)&&port>=1024&&port<=65535)return port;return 49821; }

@@ -60,6 +60,30 @@ namespace Orbit {
     throw new InvalidOperationException("호스트 PC에 연결하지 못했습니다. 호스트의 Orbit이 켜져 있고 외부 주소가 준비됐는지, 이 PC에서 "+new Uri(session.Base).Host+" 에 접속할 수 있는지 확인해 주세요.\n("+detail+")");
    }
   }
+  // Calls into the host's desktop bridge (see DeskBridge.cs). Errors carry a message the UI can show as is.
+  public static object DeskCall(Session session,string method,Dictionary<string,object> args) {
+   var reply=DeskPost(session,"desk/call",new Dictionary<string,object>{{"method",method},{"args",args??new Dictionary<string,object>()}},60000);
+   object error,result;
+   if(reply.TryGetValue("error",out error)&&error!=null)throw new InvalidOperationException(Convert.ToString(error));
+   reply.TryGetValue("result",out result);return result;
+  }
+  public static Dictionary<string,object> DeskPost(Session session,string op,Dictionary<string,object> body,int timeoutMs) {
+   var json=new JavaScriptSerializer{MaxJsonLength=16*1024*1024};
+   try {
+    var request=(HttpWebRequest)WebRequest.Create(session.Base+"/api/v1/"+op);
+    request.Method="POST";request.ContentType="application/json";request.Timeout=timeoutMs;request.ReadWriteTimeout=timeoutMs;request.AllowAutoRedirect=false;
+    request.Headers["Authorization"]="Bearer "+session.Token;
+    byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(body));request.ContentLength=bytes.Length;
+    using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
+    using(var response=(HttpWebResponse)request.GetResponse())using(var reader=Reader(response))return json.Deserialize<Dictionary<string,object>>(reader.ReadToEnd())??new Dictionary<string,object>();
+   } catch(WebException ex) {
+    var r=ex.Response as HttpWebResponse;
+    if(r!=null&&(int)r.StatusCode==401)throw new InvalidOperationException("호스트 PC가 이 로그인을 거부했습니다. 다시 로그인해 주세요.");
+    if(r!=null&&(int)r.StatusCode==404)throw new InvalidOperationException("호스트 Orbit이 원격 작업 화면을 지원하지 않는 버전입니다. 호스트 PC의 Orbit도 최신 버전으로 업데이트해 주세요.");
+    if(r!=null&&(int)r.StatusCode==429)throw new InvalidOperationException("요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.");
+    throw new InvalidOperationException("호스트 PC에 연결하지 못했습니다: "+(r!=null?"HTTP "+(int)r.StatusCode:ex.Status+" "+(ex.InnerException!=null?ex.InnerException.Message:ex.Message)));
+   }
+  }
   public static Session Login(string serviceUrl,string email,string password) {
    serviceUrl=(serviceUrl??"").Trim().TrimEnd('/');
    if(serviceUrl.Length>0&&serviceUrl.IndexOf("://",StringComparison.Ordinal)<0)serviceUrl="https://"+serviceUrl;
