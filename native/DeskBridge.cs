@@ -141,11 +141,25 @@ namespace Orbit {
         // Terminal input must reach the host in the order it was typed; file calls may overlap.
         static readonly HashSet<string> DeskOrdered=new HashSet<string> { "createTerminal","write","resize","closeTerminal","terminalName" };
         readonly object deskLaneLock=new object();
+        readonly ConcurrentDictionary<string,ConcurrentQueue<string>> deskWrites=new ConcurrentDictionary<string,ConcurrentQueue<string>>();
         Task deskLane=Task.FromResult(0);
         CancellationTokenSource deskLoop;
 
         private Task<object> DeskForwardCall(string method,Dictionary<string,object> a) {
             var session=clientSession;
+            if(method=="write") {
+                // Keystrokes queue up while a request is in flight; send whatever is waiting as one request so typing
+                // does not fall a full round trip behind per key. Order is kept by the queue and the ordered lane.
+                string sid=S(a,"session");var queue=deskWrites.GetOrAdd(sid,_=>new ConcurrentQueue<string>());queue.Enqueue(S(a,"data"));
+                lock(deskLaneLock) {
+                    var next=deskLane.ContinueWith<object>(_=>{
+                        var text=new System.Text.StringBuilder();string piece;while(queue.TryDequeue(out piece))text.Append(piece);
+                        if(text.Length==0)return null;
+                        return RemoteClientWindow.DeskCall(session,"write",new Dictionary<string,object>{{"session",sid},{"data",text.ToString()}});
+                    },TaskContinuationOptions.None);
+                    deskLane=next;return next;
+                }
+            }
             if(DeskOrdered.Contains(method)) {
                 lock(deskLaneLock) {
                     var next=deskLane.ContinueWith<object>(_=>RemoteClientWindow.DeskCall(session,method,a),TaskContinuationOptions.None);

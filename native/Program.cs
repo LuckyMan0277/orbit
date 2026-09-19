@@ -19,6 +19,7 @@ namespace Orbit {
             try { Win32.SetProcessDpiAwarenessContext(new IntPtr(-4)); }catch(EntryPointNotFoundException) { }
             // Hosts (Tailscale Funnel) and the account service only accept TLS 1.2+; do not depend on this PC's .NET/registry defaults.
             try { System.Net.ServicePointManager.SecurityProtocol=(System.Net.SecurityProtocolType)3072|(System.Net.SecurityProtocolType)12288; }catch(NotSupportedException) { System.Net.ServicePointManager.SecurityProtocol=(System.Net.SecurityProtocolType)3072; }
+            RemoteClientWindow.Tune();
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainWindow(args));return Environment.ExitCode;
         }

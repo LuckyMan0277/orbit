@@ -17,6 +17,14 @@ namespace Orbit {
  // never call into the local desktop API.
  internal sealed class RemoteClientWindow:Form {
   static RemoteClientWindow current;
+  // Without this every POST waits ~1s for a "100 Continue" that Tailscale Funnel's proxy never sends, and only two
+  // connections per host are allowed, so one pending long poll would queue everything else behind a single connection.
+  static RemoteClientWindow(){Tune();}
+  internal static void Tune(){
+   System.Net.ServicePointManager.Expect100Continue=false;
+   System.Net.ServicePointManager.UseNagleAlgorithm=false;
+   System.Net.ServicePointManager.DefaultConnectionLimit=32;
+  }
   readonly WebView2 web=new WebView2();
   RemoteClientWindow(string url,CoreWebView2Environment environment,Icon icon) {
    Text="Orbit 원격 접속";Width=480;Height=860;StartPosition=FormStartPosition.CenterScreen;if(icon!=null)Icon=icon;
@@ -47,7 +55,7 @@ namespace Orbit {
    var json=new JavaScriptSerializer();
    try {
     var request=(HttpWebRequest)WebRequest.Create(session.Base+"/api/v1/projects");
-    request.Method="POST";request.ContentType="application/json";request.Timeout=15000;request.ReadWriteTimeout=15000;request.AllowAutoRedirect=false;
+    request.Method="POST";request.ContentType="application/json";request.Timeout=15000;request.ReadWriteTimeout=15000;request.AllowAutoRedirect=false;request.ServicePoint.Expect100Continue=false;
     request.Headers["Authorization"]="Bearer "+session.Token;
     byte[] bytes=Encoding.UTF8.GetBytes("{}");request.ContentLength=bytes.Length;
     using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
@@ -71,7 +79,7 @@ namespace Orbit {
    var json=new JavaScriptSerializer{MaxJsonLength=16*1024*1024};
    try {
     var request=(HttpWebRequest)WebRequest.Create(session.Base+"/api/v1/"+op);
-    request.Method="POST";request.ContentType="application/json";request.Timeout=timeoutMs;request.ReadWriteTimeout=timeoutMs;request.AllowAutoRedirect=false;
+    request.Method="POST";request.ContentType="application/json";request.Timeout=timeoutMs;request.ReadWriteTimeout=timeoutMs;request.AllowAutoRedirect=false;request.ServicePoint.Expect100Continue=false;
     request.Headers["Authorization"]="Bearer "+session.Token;
     byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(body));request.ContentLength=bytes.Length;
     using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
@@ -93,7 +101,7 @@ namespace Orbit {
    var json=new JavaScriptSerializer();Dictionary<string,object> body;
    try {
     var request=(HttpWebRequest)WebRequest.Create(service.GetLeftPart(UriPartial.Authority)+service.AbsolutePath.TrimEnd('/')+"/login");
-    request.Method="POST";request.ContentType="application/json";request.Timeout=10000;request.ReadWriteTimeout=10000;request.AllowAutoRedirect=false;
+    request.Method="POST";request.ContentType="application/json";request.Timeout=10000;request.ReadWriteTimeout=10000;request.AllowAutoRedirect=false;request.ServicePoint.Expect100Continue=false;
     byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string,object>{{"email",email.Trim()},{"password",password}}));
     request.ContentLength=bytes.Length;
     using(var stream=request.GetRequestStream())stream.Write(bytes,0,bytes.Length);
