@@ -54,7 +54,9 @@ namespace Orbit {
    } catch(WebException ex) {
     var r=ex.Response as HttpWebResponse;
     if(r!=null&&(int)r.StatusCode==401)throw new InvalidOperationException("호스트 PC가 이 로그인을 거부했습니다. 호스트에서 계정을 다시 연결했는지 확인해 주세요.");
-    throw new InvalidOperationException("호스트 PC에 연결하지 못했습니다. 호스트의 Orbit이 켜져 있고 외부 주소가 준비됐는지 확인해 주세요."+(r!=null?" (HTTP "+(int)r.StatusCode+")":""));
+    // Keep the real reason (DNS, TLS trust, timeout, proxy...) so a failure on this PC's network is not mistaken for an offline host.
+    string detail=r!=null?"HTTP "+(int)r.StatusCode:ex.Status+": "+(ex.InnerException!=null?ex.InnerException.Message:ex.Message);
+    throw new InvalidOperationException("호스트 PC에 연결하지 못했습니다. 호스트의 Orbit이 켜져 있고 외부 주소가 준비됐는지, 이 PC에서 "+new Uri(session.Base).Host+" 에 접속할 수 있는지 확인해 주세요.\n("+detail+")");
    }
   }
   public static Session Login(string serviceUrl,string email,string password) {
