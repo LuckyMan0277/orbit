@@ -17,6 +17,8 @@ namespace Orbit {
         [STAThread] private static int Main(string[] args) {
             if(args.Contains("--self-test")) return SelfTest.Run();
             try { Win32.SetProcessDpiAwarenessContext(new IntPtr(-4)); }catch(EntryPointNotFoundException) { }
+            // Hosts (Tailscale Funnel) and the account service only accept TLS 1.2+; do not depend on this PC's .NET/registry defaults.
+            try { System.Net.ServicePointManager.SecurityProtocol=(System.Net.SecurityProtocolType)3072|(System.Net.SecurityProtocolType)12288; }catch(NotSupportedException) { System.Net.ServicePointManager.SecurityProtocol=(System.Net.SecurityProtocolType)3072; }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainWindow(args));return Environment.ExitCode;
         }
@@ -40,6 +42,7 @@ namespace Orbit {
         private RemoteServer remote;
         private RemoteAccount account;
         private RemoteClientWindow.Session clientSession;
+        private string ClientLoginFile { get { return Path.Combine(dataRoot,"client-login.dat"); } }
         private string configuredRemoteOrigin;
         private readonly RemoteTunnel tunnel=new RemoteTunnel();
         private readonly RemoteTailscale tailscale=new RemoteTailscale();
@@ -227,10 +230,31 @@ namespace Orbit {
                     case "accountSignUp":result=await Task.Run(()=>account.SignUp(S(a,"email"),S(a,"password")));break;
                     case "accountLink":result=await Task.Run(()=>account.Link(S(a,"email"),S(a,"password")));break;
                     case "accountUnlink":result=await Task.Run(()=>account.Unlink());break;
-                    case "remoteClientLogin":{var session=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));var list=await Task.Run(()=>RemoteClientWindow.Projects(session));clientSession=session;result=list;break;}
+                    case "remoteClientLogin":{
+                        var session=await Task.Run(()=>RemoteClientWindow.Login(S(a,"url"),S(a,"email"),S(a,"password")));
+                        var list=await Task.Run(()=>RemoteClientWindow.Projects(session));
+                        clientSession=session;
+                        if(a.ContainsKey("remember")&&Convert.ToBoolean(a["remember"]))ClientCredentials.Save(ClientLoginFile,S(a,"url"),S(a,"email"),S(a,"password"));else ClientCredentials.Delete(ClientLoginFile);
+                        result=list;break;
+                    }
+                    case "remoteClientAuto":{
+                        var saved=ClientCredentials.Load(ClientLoginFile);
+                        if(saved==null){result=new {available=false};break;}
+                        string savedEmail=Convert.ToString(saved["email"]);
+                        try {
+                            var session=await Task.Run(()=>RemoteClientWindow.Login(Convert.ToString(saved["url"]),savedEmail,Convert.ToString(saved["password"])));
+                            var list=(Dictionary<string,object>)await Task.Run(()=>RemoteClientWindow.Projects(session));
+                            clientSession=session;list["available"]=true;list["email"]=savedEmail;result=list;
+                        } catch(Exception ex) {
+                            // A wrong password will never start working by itself, so forget it; a network failure keeps it for the next launch.
+                            if(ex.Message==ClientCredentials.InvalidCredentials)ClientCredentials.Delete(ClientLoginFile);
+                            result=new {available=true,email=savedEmail,error=ex.Message};
+                        }
+                        break;
+                    }
                     case "remoteClientOpen":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");RemoteClientWindow.Open(clientSession.MobileUrl(S(a,"project")),environment,Icon);result=new {ok=true};break;
                     case "remoteClientProjects":if(clientSession==null)throw new InvalidOperationException("먼저 로그인해 주세요.");result=await Task.Run(()=>RemoteClientWindow.Projects(clientSession));break;
-                    case "remoteClientLogout":clientSession=null;RemoteClientWindow.CloseCurrent();result=new {ok=true};break;
+                    case "remoteClientLogout":clientSession=null;ClientCredentials.Delete(ClientLoginFile);RemoteClientWindow.CloseCurrent();result=new {ok=true};break;
                     case "remoteTailscaleSetup":OpenTailscaleSetup(S(a,"url"));result=new {ok=true};break;
                     case "remoteDiagnostic":result=await Task.Run(()=>RemoteDiagnostic());break;
                     case "remoteSnapshot": { RemoteSnapshot snapshot; string key=S(a,"request"); if(remoteSnapshots.TryGetValue(key,out snapshot)){snapshot.Data=S(a,"data");snapshot.Seq=L(a,"seq");snapshot.Cols=N(a,"cols");snapshot.Rows=N(a,"rows");try{snapshot.Ready.Set();}catch(ObjectDisposedException){}}break; }

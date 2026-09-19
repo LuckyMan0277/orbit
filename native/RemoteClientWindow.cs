@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -89,7 +90,7 @@ namespace Orbit {
   static string LoginError(string code) {
    switch(code) {
     case "invalid_email":return "이메일 형식이 올바르지 않습니다.";
-    case "invalid_credentials":return "이메일 또는 비밀번호가 올바르지 않습니다.";
+    case "invalid_credentials":return ClientCredentials.InvalidCredentials;
     case "no_pc_linked":return "이 계정에 연결된 PC가 없습니다. 접속받을 PC의 Orbit에서 먼저 계정을 연결하세요.";
     case "rate_limited":return "잠시 후 다시 시도해 주세요.";
     default:return "로그인하지 못했습니다.";
@@ -107,5 +108,28 @@ namespace Orbit {
    current.Show();
   }
   public static void CloseCurrent(){var w=current;current=null;if(w!=null&&!w.IsDisposed)w.Close();}
+ }
+ // "Auto login": remembers the client login on this PC, encrypted with the
+ // Windows user's DPAPI key (unreadable by other users or other machines).
+ internal static class ClientCredentials {
+  const string Entropy="Orbit.ClientLogin.v1";
+  public const string InvalidCredentials="이메일 또는 비밀번호가 올바르지 않습니다.";
+  public static void Save(string path,string url,string email,string password) {
+   try {
+    string text=new JavaScriptSerializer().Serialize(new Dictionary<string,object>{{"url",url},{"email",email},{"password",password}});
+    byte[] data=ProtectedData.Protect(Encoding.UTF8.GetBytes(text),Encoding.UTF8.GetBytes(Entropy),DataProtectionScope.CurrentUser);
+    Directory.CreateDirectory(Path.GetDirectoryName(path));
+    string tmp=path+".tmp";File.WriteAllBytes(tmp,data);if(File.Exists(path))File.Delete(path);File.Move(tmp,path);
+   } catch { }
+  }
+  public static Dictionary<string,object> Load(string path) {
+   try {
+    if(!File.Exists(path))return null;
+    byte[] plain=ProtectedData.Unprotect(File.ReadAllBytes(path),Encoding.UTF8.GetBytes(Entropy),DataProtectionScope.CurrentUser);
+    var value=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(Encoding.UTF8.GetString(plain));
+    return value!=null&&value.ContainsKey("email")&&value.ContainsKey("password")&&value.ContainsKey("url")?value:null;
+   } catch { return null; }
+  }
+  public static void Delete(string path){try{if(File.Exists(path))File.Delete(path);}catch{}}
  }
 }

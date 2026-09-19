@@ -138,7 +138,7 @@ async function initialize() {
   if (isDesktop && !data.testMode) checkForUpdate();
   // A PC that is already linked as a host has no reason to ask; anywhere else the
   // first thing offered is logging in to another PC.
-  if (isDesktop && !data.testMode && !state.settings.startupLoginHidden) call('accountStatus').then(a=>{if(!a.linked)showLoginScreen();}).catch(()=>{});
+  if (isDesktop && !data.testMode) call('accountStatus').then(a=>{if(!a.linked)showLoginScreen(state.settings.remoteClientAuto===true);}).catch(()=>{});
   state.folder = typeof data.folder === 'string' ? data.folder : '';
   // The native host supplies its launch folder on every start. Respect a
   // deliberate Home removal so that folder does not quietly return on reload.
@@ -589,7 +589,7 @@ const DEFAULT_ACCOUNT_SERVICE='https://orbit-account-service.studypad.workers.de
 // Full-screen login for a PC that is only a client: signs in at the account
 // service, then shows the linked PC's projects as the Home orbit. Opening a
 // project shows that PC's terminals in a separate window (no local bridge).
-function showLoginScreen(){
+function showLoginScreen(auto){
   if($('#client-login'))return;
   const shell=el('section','client-login');shell.id='client-login';
   const header=el('header','client-login-header'),brand=el('div','home-brand'),mark=document.createElement('img');
@@ -597,25 +597,35 @@ function showLoginScreen(){
   const controls=el('div','window-controls home-window-controls');
   for(const [name,label,method] of [['minimize','최소화','windowMinimize'],['maximize','최대화 또는 복원','windowMaximize'],['close','닫기','windowClose']]){const b=el('button',name==='close'?'window-close':'',''); b.type='button';b.title=label;b.setAttribute('aria-label',label);b.append(icon(name));b.onclick=()=>notify(method);controls.append(b);}
   header.append(brand,controls);
-  const form=el('form','client-login-form'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','client-login-error'),hide=document.createElement('input'),hideLabel=el('label','client-login-hide');
+  const form=el('form','client-login-form'),email=el('input','dialog-input'),password=el('input','dialog-input'),error=el('p','client-login-error'),remember=document.createElement('input'),rememberLabel=el('label','client-login-hide');
   email.type='email';email.placeholder='이메일';email.autocomplete='username';email.value=state.settings.remoteClientEmail||'';
   password.type='password';password.placeholder='비밀번호';password.autocomplete='current-password';
-  hide.type='checkbox';hideLabel.append(hide,document.createTextNode(' 시작할 때 이 화면을 표시하지 않기'));
+  remember.type='checkbox';remember.checked=state.settings.remoteClientAuto===true;rememberLabel.append(remember,document.createTextNode(' 자동 로그인 (이 PC에 암호화해서 저장)'));
   const login=el('button','primary','로그인'),skip=el('button','secondary','이 PC만 사용');login.type='submit';skip.type='button';
   error.setAttribute('role','alert');
-  form.append(el('h1','','Orbit 로그인'),el('p','client-login-note','계정에 연결된 PC의 프로젝트를 이 PC에서 엽니다. 이 PC는 접속받는 PC로 등록되지 않고 Tailscale도 필요 없습니다.'),email,password,error,login,skip,hideLabel);
+  form.append(el('h1','','Orbit 로그인'),el('p','client-login-note','계정에 연결된 PC의 프로젝트를 이 PC에서 엽니다. 이 PC는 접속받는 PC로 등록되지 않고 Tailscale도 필요 없습니다.'),email,password,error,login,skip,rememberLabel);
   let busy=false;
   form.onsubmit=async event=>{
     event.preventDefault();if(busy)return;busy=true;login.disabled=true;login.textContent='로그인 중…';error.textContent='';
     try{
-      const result=await call('remoteClientLogin',{url:state.settings.remoteClientUrl||DEFAULT_ACCOUNT_SERVICE,email:email.value.trim(),password:password.value});
-      state.settings.remoteClientEmail=email.value.trim();persist();
+      const result=await call('remoteClientLogin',{url:state.settings.remoteClientUrl||DEFAULT_ACCOUNT_SERVICE,email:email.value.trim(),password:password.value,remember:remember.checked});
+      state.settings.remoteClientEmail=email.value.trim();state.settings.remoteClientAuto=remember.checked;persist();
       password.value='';shell.remove();enterClientMode(result,email.value.trim());
     }catch(e){error.textContent=e.message||'로그인하지 못했습니다.';}
     finally{busy=false;login.disabled=false;login.textContent='로그인';}
   };
-  skip.onclick=()=>{if(hide.checked){state.settings.startupLoginHidden=true;persist();}shell.remove();};
+  skip.onclick=()=>shell.remove();
   shell.append(header,form);document.body.append(shell);email.value?password.focus():email.focus();
+  if(auto){
+    // Signed-in-before PCs go straight to the host's orbit; on failure fall back to the form with the reason.
+    busy=true;login.disabled=true;login.textContent='자동 로그인 중…';
+    call('remoteClientAuto').then(result=>{
+      if(!shell.isConnected)return;
+      if(result&&Array.isArray(result.projects)){shell.remove();enterClientMode(result,result.email);return;}
+      if(result&&result.email)email.value=result.email;
+      if(result&&result.error)error.textContent=result.error;
+    }).catch(e=>{error.textContent=e.message||'자동 로그인하지 못했습니다.';}).finally(()=>{busy=false;login.disabled=false;login.textContent='로그인';});
+  }
 }
 function enterClientMode(result,emailValue){
   const projects=(Array.isArray(result?.projects)?result.projects:[]).filter(item=>item&&typeof item.path==='string');
@@ -624,7 +634,7 @@ function enterClientMode(result,emailValue){
 }
 async function leaveClientMode(){
   await call('remoteClientLogout').catch(()=>{});
-  state.client=null;document.body.classList.remove('client-mode');renderHomeOrbit();showLoginScreen();
+  state.client=null;state.settings.remoteClientAuto=false;persist();document.body.classList.remove('client-mode');renderHomeOrbit();showLoginScreen();
 }
 async function refreshClientProjects(){
   try{enterClientMode(await call('remoteClientProjects'),state.client?.email);}

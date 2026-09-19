@@ -40,7 +40,7 @@ New-Item -ItemType Directory -Force -Path 'release\Orbit\web' | Out-Null
 Copy-Item -Path 'dist\*' -Destination 'release\Orbit\web' -Recurse -Force
 Copy-Item -LiteralPath "$sdk\lib\net462\Microsoft.Web.WebView2.Core.dll","$sdk\lib\net462\Microsoft.Web.WebView2.WinForms.dll","$sdk\runtimes\win-x64\native\WebView2Loader.dll" -Destination 'release\Orbit' -Force
 $sources = Get-ChildItem -LiteralPath native -Filter '*.cs' | ForEach-Object FullName
-$compilerArgs = @('/nologo','/target:winexe','/platform:x64','/optimize+', '/win32icon:assets\orbit.ico','/resource:assets\orbit.ico,Orbit.Icon','/out:release\Orbit\Orbit.exe','/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',"/reference:$sdk\lib\net462\Microsoft.Web.WebView2.Core.dll","/reference:$sdk\lib\net462\Microsoft.Web.WebView2.WinForms.dll") + $sources
+$compilerArgs = @('/nologo','/target:winexe','/platform:x64','/optimize+', '/win32icon:assets\orbit.ico','/resource:assets\orbit.ico,Orbit.Icon','/out:release\Orbit\Orbit.exe','/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll','/reference:System.Security.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',"/reference:$sdk\lib\net462\Microsoft.Web.WebView2.Core.dll","/reference:$sdk\lib\net462\Microsoft.Web.WebView2.WinForms.dll") + $sources
 & $csc @compilerArgs
 if ($LASTEXITCODE -ne 0) { throw '네이티브 빌드 실패' }
 Copy-Item -LiteralPath 'native\Orbit.exe.config' -Destination 'release\Orbit' -Force
