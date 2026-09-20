@@ -290,7 +290,11 @@ const hashProject = (String(location.hash).match(/(?:^|[#&])project=([^&]+)/) ||
 if (hashProject) { try { project = decodeURIComponent(hashProject); savePreference('orbit.remote.project', project); } catch { /* ignore a malformed value */ } }
 if (hashToken) { if (token !== hashToken) { invalidateComposeState(); serverEpoch = ''; } token = hashToken; if (!saveCredentials(token)) { token = ''; storageBlocked = true; } history.replaceState(null, '', location.pathname); }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { pollAbort?.abort(); clearTimeout(retryTimer); } else refresh(); }); window.addEventListener('online', refresh); window.addEventListener('offline', () => { available = false; controls(); state('오프라인', true); });
-if (token) { showWorkspace(); } else { $('#boot').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/mobile-sw.js').catch(() => {});
+// The home-screen app has its own storage on iOS: point the manifest's start_url at this login so the installed app can sign in.
+function syncManifest() { const link = document.querySelector('link[rel="manifest"]'); if (link && token) link.href = '/mobile.webmanifest?login=' + encodeURIComponent(token); }
+const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+if (!token && standalone) { const note = document.querySelector('#login p'); if (note) note.textContent = '홈 화면 앱은 Safari와 로그인 정보를 따로 저장합니다. Safari에서 PC의 QR을 스캔해 연 다음, 홈 화면에 다시 추가해 주세요.'; }
+if (token) { syncManifest(); showWorkspace(); } else { $('#boot').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/mobile-sw.js').catch(() => {});
 
 function initInstallBanner() {
   const banner = $('#install-banner'), text = $('#install-text'), action = $('#install-action'), dismiss = $('#install-dismiss');

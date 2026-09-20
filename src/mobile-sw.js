@@ -1,5 +1,5 @@
-const CACHE='orbit-remote-v11';
-const shell=['/mobile.html','/mobile.js','/mobile.css','/mobile.webmanifest','/orbit.svg','/orbit-180.png','/orbit-192.png','/orbit-512.png'];
+const CACHE='orbit-remote-v12';
+const shell=['/mobile.html','/mobile.js','/mobile.css','/orbit.svg','/orbit-180.png','/orbit-192.png','/orbit-512.png'];
 const allowed=path=>shell.includes(path)||(/^\/chunks\/[A-Za-z0-9_-]+\.(js|css)$/).test(path);
 // A cellular hiccup (e.g. right after the Camera app hands off to Safari for a
 // scanned QR) can leave this fetch pending forever with no timeout of its own,
