@@ -83,6 +83,14 @@ export class TerminalPane {
     this.started = true; this.pid = result.pid; this.focus();
   }
   focus() { requestAnimationFrame(() => { if (!this.closed && this.element.clientWidth) { if (!this.attached) this.fit.fit(); this.term.focus(); } }); }
+  // Moving the pane in the DOM (session/tab switch, split) resets the scroll area to 0 while xterm still thinks it is scrolled, so the wheel stops scrolling up. Re-sync it once attached.
+  syncScroll() {
+    requestAnimationFrame(() => {
+      const viewport = this.element.querySelector('.xterm-viewport'), buffer = this.term.buffer.active;
+      if (this.closed || !viewport || !viewport.clientHeight || !buffer.length) return;
+      viewport.scrollTop = buffer.viewportY >= buffer.baseY ? viewport.scrollHeight : Math.round(viewport.scrollHeight * buffer.viewportY / buffer.length);
+    });
+  }
   configure(settings) { this.term.options.fontSize = settings.fontSize; this.term.options.scrollback = settings.lowPower ? 500 : 2000; this.term.options.minimumContrastRatio = settings.theme === 'light' ? 4.5 : 1; this.term.options.theme = terminalTheme(settings.theme); if (!this.attached) this.fit.fit(); }
   async pasteClipboard() {
     if (this.exited || !this.started) return toast('실행 중인 터미널을 선택해 주세요.', true);
