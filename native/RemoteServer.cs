@@ -37,7 +37,7 @@ namespace Orbit {
      if(token==null)throw new IOException("기기 등록 정보를 저장하지 못했습니다.");
      try{File.WriteAllText(file,token);}catch{}
     }
-    return Url()+"#login="+Uri.EscapeDataString(token);
+    return Url()+"?login="+Uri.EscapeDataString(token);
    }
   }
   public string OriginUrl(){return PublicOrigin??("http://127.0.0.1:"+Port);}

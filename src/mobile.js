@@ -245,7 +245,9 @@ async function compose(submit) {
   finally { composerBusy = false; controls(); saveDraft(); }
 }
 function parseLoginToken(value) {
-  try { value = new URL(value).hash; } catch { /* fragment or invalid URL */ }
+  // The QR carries the token as ?login= (in-app browsers and some scanners drop or encode a #fragment); links from the
+  // account login page still use #login=.
+  try { const url = new URL(value); value = url.search + url.hash; } catch { /* fragment or invalid URL */ }
   const match = String(value || '').match(/(?:^|[?#&])login=([^&\s]+)/);
   if (!match) return null;
   try { return decodeURIComponent(match[1]) || null; } catch { return null; }
