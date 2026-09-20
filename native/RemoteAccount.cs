@@ -45,6 +45,18 @@ namespace Orbit {
    Raise();
    return new {ok=true,email=emailValue};
   }
+  // For the web/phone login form: checks the password at the account service and hands back this PC's own device token, but only
+  // when the account really is the one linked to this PC. Anything else is refused without saying which part was wrong.
+  public string VerifyLogin(string emailValue,string password) {
+   emailValue=(emailValue??"").Trim().ToLowerInvariant();
+   string baseUrl=ServiceUrl,ownEmail,ownToken;lock(gate){ownEmail=email;ownToken=deviceToken;}
+   if(String.IsNullOrEmpty(ownToken)||String.IsNullOrEmpty(baseUrl))throw new InvalidOperationException("이 PC에는 아직 계정이 연결되어 있지 않습니다.");
+   if(emailValue.Length==0||String.IsNullOrEmpty(password)||password.Length>256)throw new UnauthorizedAccessException();
+   string error;var response=Post(baseUrl+"/login",new Dictionary<string,object>{{"email",emailValue},{"password",password}},out error);
+   object token;
+   if(response==null||!response.TryGetValue("deviceToken",out token)||!String.Equals(emailValue,ownEmail,StringComparison.Ordinal)||!String.Equals(Convert.ToString(token),ownToken,StringComparison.Ordinal))throw new UnauthorizedAccessException();
+   return ownToken;
+  }
   public object Unlink() {
    string secret,tokenValue,baseUrl=ServiceUrl,emailValue;
    lock(gate){secret=pushSecret;tokenValue=deviceToken;emailValue=email;}

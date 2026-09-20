@@ -284,16 +284,34 @@ function closeMenu() { $('#menu-panel').hidden = true; }
 $('#menu-toggle').onclick = () => { $('#menu-panel').hidden = !$('#menu-panel').hidden; };
 $('#theme').onchange = event => { themeChoice = event.target.value; savePreference('orbit.remote.theme', themeChoice); applyTheme(); }; $('#readable-output').onscroll = () => { $('#latest').hidden = atOutputEnd(); };
 visualViewport?.addEventListener('resize', updateViewport); window.addEventListener('resize', updateViewport); matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice === 'system') applyTheme(); });
+const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 const hashToken = parseLoginToken(location.href);
 // The desktop app's client mode opens a specific project of this PC via #project=.
 const hashProject = (String(location.hash).match(/(?:^|[#&])project=([^&]+)/) || [])[1];
 if (hashProject) { try { project = decodeURIComponent(hashProject); savePreference('orbit.remote.project', project); } catch { /* ignore a malformed value */ } }
-if (hashToken) { if (token !== hashToken) { invalidateComposeState(); serverEpoch = ''; } token = hashToken; if (!saveCredentials(token)) { token = ''; storageBlocked = true; } history.replaceState(null, '', location.pathname); }
+if (hashToken) { if (token !== hashToken) { invalidateComposeState(); serverEpoch = ''; } token = hashToken; if (!saveCredentials(token)) { token = ''; storageBlocked = true; } // Keep the login in the address while in a normal browser tab: iOS builds a home-screen app from the URL that is open when it is
+  // added, and that app has its own empty storage, so a cleaned URL would create an app that can never sign in.
+  if (standalone) history.replaceState(null, '', location.pathname); }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { pollAbort?.abort(); clearTimeout(retryTimer); } else refresh(); }); window.addEventListener('online', refresh); window.addEventListener('offline', () => { available = false; controls(); state('오프라인', true); });
 // The home-screen app has its own storage on iOS: point the manifest's start_url at this login so the installed app can sign in.
 function syncManifest() { const link = document.querySelector('link[rel="manifest"]'); if (link && token) link.href = '/mobile.webmanifest?login=' + encodeURIComponent(token); }
-const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
-if (!token && standalone) { const note = document.querySelector('#login p'); if (note) note.textContent = '홈 화면 앱은 Safari와 로그인 정보를 따로 저장합니다. Safari에서 PC의 QR을 스캔해 연 다음, 홈 화면에 다시 추가해 주세요.'; }
+// The login card is a real form (this browser or installed home-screen app has no login yet): the PC verifies the account and
+// returns its own token, which is then kept in this browser's storage.
+{
+  const form = $('#login-form'), errorNote = $('#login-error'), submit = $('#login-submit');
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); errorNote.hidden = true; submit.disabled = true;
+    try {
+      const response = await fetch('/api/v1/login', { method:'POST', cache:'no-store', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ email:$('#login-email').value, password:$('#login-password').value }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.token) throw new Error(response.status === 401 ? '이메일 또는 비밀번호가 올바르지 않습니다.' : response.status === 409 ? (body.error || '이 PC에는 아직 계정이 연결되어 있지 않습니다.') : response.status === 429 ? '잠시 후 다시 시도해 주세요.' : '로그인하지 못했습니다. PC의 Orbit이 켜져 있는지 확인해 주세요.');
+      token = body.token; $('#login-password').value = '';
+      if (!saveCredentials(token)) storageBlocked = true;
+      syncManifest(); showWorkspace();
+    } catch (failure) { errorNote.textContent = failure.message || '로그인하지 못했습니다.'; errorNote.hidden = false; }
+    finally { submit.disabled = false; }
+  });
+}
 if (token) { syncManifest(); showWorkspace(); } else { $('#boot').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/mobile-sw.js').catch(() => {});
 
 function initInstallBanner() {

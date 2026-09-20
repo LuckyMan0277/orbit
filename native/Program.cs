@@ -65,7 +65,7 @@ namespace Orbit {
             dataRoot=remoteTest ? Path.Combine(TestArtifacts.Root,"remote-test-profile") : uiTest ? Path.Combine(TestArtifacts.Root,"webview-profile") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"OrbitAgentDesktop");
             ApplyHostTheme(ReadSavedTheme());
             remote=new RemoteServer(this,Path.Combine(dataRoot,"remote-devices.json"));remote.Changed+=delegate { Send(new {type="remoteStatus",status=remote.Status()}); };
-            account=new RemoteAccount(remote,Path.Combine(dataRoot,"account.json"));account.Changed+=delegate { Send(new {type="remoteAccount",account=account.Status()}); };
+            account=new RemoteAccount(remote,Path.Combine(dataRoot,"account.json"));remote.AccountLogin=(email,password)=>account.VerifyLogin(email,password);account.Changed+=delegate { Send(new {type="remoteAccount",account=account.Status()}); };
             tunnel.Changed+=delegate(string url,string error){RefreshRemoteOrigin();if(!String.IsNullOrEmpty(url)&&remoteTestTunnel)try{File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),remote.Url()+"#login="+Uri.EscapeDataString(remote.IssueAccountToken("remote-test-tunnel")));}catch{}Send(new {type="remoteTunnel",tunnel=tunnel.Status(),url=url,error=error});};
             tailscale.Changed+=delegate {RefreshRemoteOrigin();Send(new {type="remoteTailscale",tailscale=tailscale.Status()});};
             initialFolder=args.FirstOrDefault(x=>Directory.Exists(x)) ?? ((uiTest||remoteTest) ? TestArtifacts.Root : Environment.CurrentDirectory);

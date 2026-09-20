@@ -18,6 +18,8 @@ namespace Orbit {
   sealed class Rate {public DateTime Window=DateTime.UtcNow;public int Count;}
   sealed class Receipt {public string Session,Payload;public DateTime Expires;public volatile int State;}
   public int Port{get;private set;} public string PublicOrigin{get;private set;} public event Action Changed;
+  // Set by the host: (email, password) -> this PC's device token, or throws. Powers the login form of the web/phone UI.
+  public Func<string,string,string> AccountLogin;
   public bool Enabled { get { lock(lifecycle)return running; } }
   public RemoteServer(IRemoteTerminals value,string storage){terminals=value;deviceFile=storage;Load();}
   public string Start(int port){lock(lifecycle){if(running)return Url();Port=port;listener=new HttpListener();listener.Prefixes.Add("http://127.0.0.1:"+port+"/");listener.Start();running=true;BeginAccept();}Raise();return Url();}
@@ -59,7 +61,7 @@ namespace Orbit {
    Dictionary<string,object>a;Device device;
    // Desktop-bridge bodies may carry file contents, so authenticate before accepting the larger body.
    if(desk){device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}a=Parse(Body(c,DeskMaxBody));}
-   else{a=Parse(Body(c));device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}}
+   else{a=Parse(Body(c));if(op=="login"){LoginRoute(c,a);return;}device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}}
    if(!RateOk("device:"+device.Hash,desk?6000:900)){Reply(c,429,new {error="rate limited"});return;}
    if(desk){DeskRoute(c,a,op,device);return;}
    if(op=="sessions"){Reply(c,200,WithEpoch(terminals.Sessions()));return;}
@@ -72,6 +74,15 @@ namespace Orbit {
    if(op=="input/status"){InputStatus(c,a,device);return;}
    if(op=="input"){Input(c,a,device);return;}
    Reply(c,404,new {error="unknown api"});
+  }
+  void LoginRoute(HttpListenerContext c,Dictionary<string,object> a){
+   // Behind the public tunnel every caller looks like 127.0.0.1, so throttle globally; the account service throttles per e-mail too.
+   if(!RateOk("web-login",20)){Reply(c,429,new {error="rate limited"});return;}
+   var login=AccountLogin;if(login==null){Reply(c,503,new {error="unavailable"});return;}
+   try{Reply(c,200,new {token=login(S(a,"email"),S(a,"password"))});}
+   catch(UnauthorizedAccessException){Reply(c,401,new {error="invalid credentials"});}
+   catch(InvalidOperationException ex){Reply(c,409,new {error=ex.Message});}
+   catch{Reply(c,503,new {error="unavailable"});}
   }
   void DeskRoute(HttpListenerContext c,Dictionary<string,object> a,string op,Device device){
    var bridge=terminals as IDeskBridge;if(bridge==null){Reply(c,404,new {error="unknown api"});return;}
