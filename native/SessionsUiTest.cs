@@ -59,6 +59,17 @@ check(document.querySelector('#breadcrumb-folder').textContent==='proj-a','the h
 check(rowOf(S()[0].id).classList.contains('active'),'the selected session row is not highlighted');
 ");
             await window.CaptureForTest(TestArtifacts.PathFor("sessions-list.png"));
+            // what the real host tells a phone about each session: its project, how far its output got, and when it last printed
+            var listed=json.Deserialize<System.Collections.Generic.Dictionary<string,object>>(json.Serialize(((IRemoteTerminals)window).Sessions()));
+            var items=(System.Collections.ArrayList)listed["sessions"];
+            if(items.Count!=3) throw new InvalidOperationException("the host lists "+items.Count+" sessions, expected 3");
+            int inA=0,inB=0;
+            foreach(System.Collections.Generic.Dictionary<string,object> item in items) {
+                string project=Convert.ToString(item["project"]);
+                if(String.Equals(project,projectA,StringComparison.OrdinalIgnoreCase))inA++;else if(String.Equals(project,projectB,StringComparison.OrdinalIgnoreCase))inB++;
+                if(Convert.ToInt64(item["seq"])<=0||Convert.ToInt64(item["lastOutputMs"])<0||Convert.ToBoolean(item["asking"])) throw new InvalidOperationException("the host reported wrong activity for a session that just started: "+json.Serialize(item));
+            }
+            if(inA!=2||inB!=1) throw new InvalidOperationException("the host reports the wrong projects for the sessions (A "+inA+", B "+inB+")");
             await Stage(window,@"
 const S=()=>window.orbitUiTest.diagnostics().sessions;
 const rowOf=id=>document.querySelector('.session-row[data-terminal-id=""'+id+'""]');

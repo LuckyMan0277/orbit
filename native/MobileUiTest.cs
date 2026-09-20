@@ -16,7 +16,10 @@ namespace Orbit {
     // do not launch shells or expose a test listener through a public tunnel.
     internal static class MobileUiTest {
         sealed class Terminals : IRemoteTerminals, IRemoteSecrets {
-            sealed class Session { internal string Id,Name,Profile;internal int Pid; }
+            sealed class Session { internal string Id,Name,Profile,Project="C:\\orbit";internal int Pid;internal long Seq,LastOutputMs=-1;internal bool Asking; }
+            internal readonly List<string> CreatedProjects=new List<string>();
+            internal void AddSession(string id,string name,string project) { lock(sessions)sessions.Add(new Session{Id=id,Name=name,Profile="claude",Project=project,Pid=300+sessions.Count}); }
+            internal void SetActivity(string id,long lastOutputMs,long seq,bool asking=false) { lock(sessions){var item=sessions.First(x=>x.Id==id);item.LastOutputMs=lastOutputMs;item.Seq=seq;item.Asking=asking;} }
             internal readonly List<string> Inputs=new List<string>();
             internal readonly List<string> Created=new List<string>();
             internal readonly List<string> SecretCreates=new List<string>(),SetCalls=new List<string>();
@@ -31,7 +34,7 @@ namespace Orbit {
             object IRemoteSecrets.Create(string profile,string resumeId,string project,string[] secrets) { lock(SecretCreates)SecretCreates.Add(profile+":"+(secrets==null?"*":String.Join(",",secrets)));return Create(profile,resumeId,project); }
             readonly List<Session> sessions=new List<Session> {new Session{Id="cmd",Name="CMD",Profile="cmd",Pid=101},new Session{Id="ps",Name="PowerShell",Profile="powershell",Pid=102}};
             bool dropped; long outputSeq=9; string pendingOutput="";
-            public object Sessions() { lock(sessions)return new {sessions=sessions.Select(s=>new {id=s.Id,name=s.Name,profile=s.Profile,pid=s.Pid}).ToArray()}; }
+            public object Sessions() { lock(sessions)return new {sessions=sessions.Select(s=>new {id=s.Id,name=s.Name,profile=s.Profile,pid=s.Pid,project=s.Project,seq=s.Seq,lastOutputMs=s.LastOutputMs,asking=s.Asking}).ToArray()}; }
             public object Snapshot(string id) {
                 lock(sessions)if(!sessions.Any(s=>s.Id==id)) throw new InvalidOperationException("terminal not found");
                 string longLine="\uD55C\uAD6D\uC5B4 \uAE34 \uCD9C\uB825 "+new string('\uAC00',260)+" https://example.test/very/long/path/without/a/natural/break";
@@ -42,7 +45,7 @@ namespace Orbit {
             internal void EmitOutput(string value) { lock(this){pendingOutput=value;outputSeq++;} }
             public object SavedSessions() { return new {sessions=new[]{new {provider="codex",id="11111111-1111-4111-8111-111111111111",title="Saved mobile Codex",cwd="C:\\orbit"}}}; }
             public object DeleteSavedSession(string provider,string id) { return new {sessions=new object[0]}; }
-            public object Create(string profile,string resumeId,string project=null) { lock(Created)Created.Add(profile+(String.IsNullOrEmpty(resumeId)?"":"/resume"));string id=String.IsNullOrEmpty(resumeId)?"new-"+profile:"resume-"+profile;lock(sessions)sessions.Add(new Session{Id=id,Name=profile,Profile=profile,Pid=200+sessions.Count});return new {session=id}; }
+            public object Create(string profile,string resumeId,string project=null) { lock(Created)Created.Add(profile+(String.IsNullOrEmpty(resumeId)?"":"/resume"));lock(CreatedProjects)CreatedProjects.Add(project??"");string id=String.IsNullOrEmpty(resumeId)?"new-"+profile:"resume-"+profile;lock(sessions)sessions.Add(new Session{Id=id,Name=profile,Profile=profile,Pid=200+sessions.Count});return new {session=id}; }
             public object Projects() { return new {projects=new[]{new {path="C:\\orbit",name="orbit"}},current="C:\\orbit"}; }
             public void Input(string id,string data) {
                 lock(Inputs)Inputs.Add(id+"|"+data);
@@ -130,6 +133,19 @@ namespace Orbit {
                     await Task.Delay(150);
                     await window.CaptureMobileViewportForTest(TestArtifacts.PathFor("mobile-secrets-tablet.png"));
                     await window.ExecuteForTest("document.querySelector('#menu-panel').hidden=true;'menu closed'");
+                    // sessions of two projects: grouped in the menu, a status dot each, and the phone follows the session in front
+                    terminals.AddSession("other","other · Claude","C:\\other");
+                    await Stage(window,SessionsShowScript);
+                    terminals.SetActivity("other",300,5);
+                    await Stage(window,SessionsWorkingScript);
+                    await window.CaptureMobileViewportForTest(TestArtifacts.PathFor("mobile-sessions-tablet.png"));
+                    terminals.SetActivity("other",-1,5);
+                    await Stage(window,SessionsAttentionScript);
+                    terminals.SetActivity("cmd",-1,0,true);
+                    await Stage(window,SessionsAskingScript);
+                    terminals.SetActivity("cmd",-1,0,false);
+                    await Stage(window,SessionsProjectScript);
+                    lock(terminals.CreatedProjects)if(terminals.CreatedProjects.Count==0||terminals.CreatedProjects[terminals.CreatedProjects.Count-1]!="C:\\orbit") throw new InvalidOperationException("a session started from the New Session box must use the project chosen there: "+String.Join(";",terminals.CreatedProjects));
                     string replacementToken=server.IssueAccountToken("replacement-token-test");
                     if(String.IsNullOrEmpty(replacementToken)) throw new InvalidOperationException("mobile test replacement token setup failed");
                     await window.ExecuteForTest("localStorage.setItem('orbit.remote.token','revoked-token');'replacement token set'");
@@ -186,6 +202,43 @@ const del=temp.querySelector('.secret-delete');del.click();check(del.textContent
 del.click();for(let i=0;i<80&&document.querySelector('#secret-list [data-secret=TEMP_KEY]');i++)await pause(50);
 check(!document.querySelector('#secret-list [data-secret=TEMP_KEY]')&&document.querySelector('#secret-list [data-secret=OPENAI_API_KEY]'),'the second tap should delete only that key');
 const target=tabs().length+1;document.querySelector('[data-create=powershell]').click();for(let i=0;i<80&&tabs().length!==target;i++)await pause(50);check(tabs().length===target,'a session was not created with keys stored');
+";
+        const string SessionsPrelude=@"
+const until=async(test,label,ms=14000)=>{for(let i=0;i<ms/40&&!test();i++)await pause(40);check(test(),label);};
+const tabOf=id=>document.querySelector('.session-tab[data-session-id=""'+id+'""]'),rowOf=id=>document.querySelector('.session-group-row[data-session-id=""'+id+'""]');
+";
+        const string SessionsShowScript=SessionsPrelude+@"
+await until(()=>tabOf('other'),'a session that appeared on the PC did not show up on the phone');
+check(tabOf('other').querySelector('.session-dot'),'the session tab has no status dot');
+document.querySelector('#menu-toggle').click();await pause(100);
+const groups=Array.from(document.querySelectorAll('#session-groups .session-group')).map(g=>({head:g.querySelector('.session-group-head').textContent,rows:Array.from(g.querySelectorAll('.session-label')).map(x=>x.textContent)}));
+check(groups.length===2&&groups[0].head==='orbit'&&groups[1].head==='other','the menu does not group sessions by project: '+JSON.stringify(groups));
+check(JSON.stringify(groups[1].rows)===JSON.stringify(['Claude']),'the project prefix should not repeat inside its group: '+JSON.stringify(groups[1].rows));
+check(!document.querySelector('#project-row'),'the old project row is still in the menu');
+";
+        const string SessionsWorkingScript=SessionsPrelude+@"
+await until(()=>tabOf('other')&&tabOf('other').dataset.status==='working','a session that is printing should read as working');
+check(rowOf('other').querySelector('.session-status').textContent==='작업 중','the working label is wrong');
+";
+        const string SessionsAttentionScript=SessionsPrelude+@"
+await until(()=>tabOf('other')&&tabOf('other').dataset.status==='attention','a session that printed while not in front and went quiet should ask for a look');
+check(rowOf('other').querySelector('.session-status').textContent==='확인해 보세요','the attention label is wrong');
+";
+        const string SessionsAskingScript=SessionsPrelude+@"
+await until(()=>rowOf('cmd')&&rowOf('cmd').dataset.status==='attention'&&rowOf('cmd').querySelector('.session-status').textContent==='키 요청','a session waiting for an API key should read as such');
+";
+        const string SessionsProjectScript=SessionsPrelude+@"
+// opening the session that wants a look clears the mark and moves the phone to its project
+rowOf('other').click();
+await until(()=>document.querySelector('#session-select').value==='other','the session was not opened from the menu');
+await until(()=>tabOf('other')&&tabOf('other').dataset.status==='idle','looking at a session should clear its attention mark');
+const select=document.querySelector('#new-session .project-select');check(select&&select.options.length>=2,'the New Session box has no project picker');
+check(select.value==='C:\\other','the phone did not follow the session to its project: '+select.value);
+// the project picker and the agent are chosen together in that box
+select.value='C:\\orbit';select.dispatchEvent(new Event('change',{bubbles:true}));
+const before=Array.from(document.querySelectorAll('.session-tab')).length;
+document.querySelector('#new-session').open=true;document.querySelector('#new-session [data-create=powershell]').click();
+await until(()=>document.querySelectorAll('.session-tab').length===before+1,'the session was not created');
 ";
         const string AskShowScript=@"
 const box=document.querySelector('#secret-request');

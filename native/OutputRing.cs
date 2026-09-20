@@ -7,13 +7,15 @@ namespace Orbit {
     internal sealed class OutputRing {
         sealed class Item { public long Seq; public string Data; }
         readonly object gate=new object(); readonly List<Item> items=new List<Item>();
-        long next,generation; int bytes; bool closed;
+        long next,generation,lastTicks; int bytes; bool closed;
         public long Advance(string data,bool record) {
-            lock(gate) { long seq=++next;if(!record){items.Clear();bytes=0;Monitor.PulseAll(gate);return seq;}var item=new Item { Seq=seq,Data=data };items.Add(item);bytes+=data.Length;
+            lock(gate) { long seq=++next;lastTicks=DateTime.UtcNow.Ticks;if(!record){items.Clear();bytes=0;Monitor.PulseAll(gate);return seq;}var item=new Item { Seq=seq,Data=data };items.Add(item);bytes+=data.Length;
                 while(items.Count>256||bytes>1024*1024){bytes-=items[0].Data.Length;items.RemoveAt(0);}
                 Monitor.PulseAll(gate);return item.Seq;
             }
         }
+        // Where the output stands and when it last moved: a phone shows what each session is doing without watching all of them.
+        public void Stats(out long seq,out long ticks) { lock(gate){seq=next;ticks=lastTicks;} }
         public void Clear() { lock(gate){generation++;items.Clear();bytes=0;Monitor.PulseAll(gate);} }
         public void Close() { lock(gate){generation++;closed=true;items.Clear();bytes=0;Monitor.PulseAll(gate);} }
         // The recent output as one text, for viewers that cannot get a screen snapshot from a UI terminal.

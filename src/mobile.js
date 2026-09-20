@@ -5,6 +5,7 @@ import { conversationDetails } from './remote-readable.js';
 import { composePackets, composeStageKey, epochChanged, sendComposerPackets } from './remote-input.js';
 import { remainingDeadlineMs } from './remote-connection.js';
 import { commonSecretNames, secretNameProblem, suggestSecretName } from './secret-hints.js';
+import { sessionStatus, groupByProject } from './session-status.js';
 
 const $ = selector => document.querySelector(selector);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -19,6 +20,7 @@ function savePreference(key, value) { try { localStorage.setItem(key, value); } 
 let token = stored('orbit.remote.token');
 let serverEpoch = '', session = '', readySession = '', sessions = [], savedSessions = [], seq = 0;
 let projects = [], project = stored('orbit.remote.project'), currentProject = '';
+const seenSeq = new Map(); let statusBusy = false;
 // Names only: the values live encrypted on the PC and are never sent back here.
 let secretKeys = [], secretNamed = false, shownRequest = '', shownRequestName = '', shownRequestProject = '';
 let run = 0, pollAbort = null, reconnecting = false, available = true, retryTimer = 0, connectionOpen = false;
@@ -91,13 +93,81 @@ function controls() {
 function sessionName(item) { return item.name || item.title || profiles[item.profile] || '터미널'; }
 function truncateName(text, max = 22) { const value = String(text || ''); return value.length > max ? `${value.slice(0, max - 3).trimEnd()}...` : value; }
 function renderTabs() {
-  $('#session-tabs').replaceChildren(...sessions.map(item => { const button = document.createElement('button'); button.className = `session-tab${item.id === session ? ' active' : ''}`; const full = sessionName(item); button.textContent = truncateName(full); button.title = full; button.onclick = () => { selectSession(item.id); closeMenu(); }; return button; }));
+  syncProject();
+  $('#session-tabs').replaceChildren(...sessions.map(item => {
+    const button = document.createElement('button'), dot = document.createElement('span'), label = document.createElement('span'), full = sessionName(item), status = statusOf(item);
+    button.className = `session-tab${item.id === session ? ' active' : ''}`; button.dataset.sessionId = item.id; button.dataset.status = status.key;
+    dot.className = 'session-dot'; label.textContent = truncateName(full); button.append(dot, label);
+    button.title = `${full} · ${status.label}`; button.onclick = () => { selectSession(item.id); closeMenu(); }; return button;
+  }));
   $('#session-select').replaceChildren(...sessions.map(item => { const full = sessionName(item); const option = new Option(truncateName(full), item.id, false, item.id === session); option.title = full; return option; }));
+  renderSessionGroups();
   $('#empty').hidden = !!session; $('#workspace').classList.toggle('is-empty', !session); controls();
   $('#output-title').textContent = session ? truncateName(sessionName(sessions.find(item => item.id === session) || {})) : '현재 터미널';
 }
+// ---- Sessions. Like the desktop window, the phone lists sessions grouped by project with a status dot each. The host reports, per session, its project,
+// how far its output has got (seq), how long ago it last printed, and whether it waits for a key; nothing here has to watch every session.
+function sameProject(a, b) { return String(a || '').toLowerCase() === String(b || '').toLowerCase(); }
+function statusOf(item) {
+  const now = Date.now(), recent = item.lastOutputMs >= 0 && item.lastOutputMs < 2500, viewing = item.id === session && !document.hidden;
+  const unread = !viewing && item.seq > (seenSeq.get(item.id) ?? item.seq);
+  return sessionStatus({ exited:false, asking:!!item.asking, now, lastOutputAt:recent ? now - item.lastOutputMs : 0, unread });
+}
+function inGroupLabel(item, path) { const full = sessionName(item), prefix = `${projectName(path)} · `; return path && full.startsWith(prefix) ? full.slice(prefix.length) : full; }
+function renderSessionGroups() {
+  const box = $('#session-groups'); if (!box) return;
+  box.hidden = !sessions.length;
+  box.replaceChildren(...groupByProject(sessions, item => item.project || '').map(group => {
+    const section = document.createElement('div'), head = document.createElement('div');
+    section.className = 'session-group'; head.className = 'session-group-head'; head.textContent = group.path ? projectName(group.path) : '세션';
+    section.append(head, ...group.items.map(item => {
+      const status = statusOf(item), row = document.createElement('button'), dot = document.createElement('span'), label = document.createElement('span'), text = document.createElement('span');
+      row.className = `session-group-row${item.id === session ? ' active' : ''}`; row.dataset.sessionId = item.id; row.dataset.status = status.key;
+      dot.className = 'session-dot'; label.className = 'session-label'; label.textContent = inGroupLabel(item, group.path); text.className = 'session-status'; text.textContent = status.label;
+      row.append(dot, label, text); row.onclick = () => { selectSession(item.id); closeMenu(); }; return row;
+    }));
+    return section;
+  }));
+}
+function paintStatuses() {
+  for (const item of sessions) {
+    const status = statusOf(item);
+    document.querySelectorAll(`[data-session-id="${CSS.escape(item.id)}"]`).forEach(node => {
+      node.dataset.status = status.key; const text = node.querySelector('.session-status'); if (text) text.textContent = status.label;
+      if (node.classList.contains('session-tab')) node.title = `${sessionName(item)} · ${status.label}`;
+    });
+  }
+}
+// The project the phone works in follows the session in front (as on the desktop): saved conversations, API keys and new sessions use it.
+function syncProject() {
+  const current = sessions.find(item => item.id === session);
+  if (!current?.project || sameProject(current.project, project)) return;
+  project = current.project; savePreference('orbit.remote.project', project); renderProjects(); renderSaved();
+  if (token && connectionOpen) loadSecrets().catch(() => {});
+}
+// Every few seconds: the other sessions' state. It never touches the session in front, its output poll or its snapshot.
+async function refreshStatuses() {
+  if (!connectionOpen || document.hidden || !token || reconnecting || statusBusy || !session) return;
+  statusBusy = true; const access = token, expected = run;
+  try {
+    const data = await api('sessions', {}, true, undefined, access, 6000);
+    if (access !== token || expected !== run || !checkEpoch(data)) return;
+    const list = Array.isArray(data.sessions) ? data.sessions : [];
+    const same = list.length === sessions.length && list.every((item, index) => item.id === sessions[index].id && item.name === sessions[index].name && item.project === sessions[index].project);
+    sessions = list;
+    for (const item of list) if (!seenSeq.has(item.id)) seenSeq.set(item.id, item.seq ?? 0);
+    const front = list.find(item => item.id === session); if (front) seenSeq.set(session, front.seq ?? 0);
+    if (same) { paintStatuses(); renderSessionGroups(); } else renderTabs();
+  } catch { /* the output poll reports connection problems */ }
+  finally { statusBusy = false; }
+}
 function renderSaved() { const box=$('#saved-list'),query=($('#saved-filter')?.value||'').toLowerCase(),rows=savedSessions.filter(item=>(!project||(item.cwd||'').toLowerCase()===project.toLowerCase())&&`${item.title} ${item.cwd} ${item.provider}`.toLowerCase().includes(query)); if(!rows.length){box.replaceChildren(Object.assign(document.createElement('p'),{textContent:query?'일치하는 이전 대화가 없습니다.':'저장된 이전 대화가 없습니다.'}));return;} box.replaceChildren(...rows.map(item=>{const row=document.createElement('div'),button=document.createElement('button'),remove=document.createElement('button'),date=item.updated?new Date(item.updated).toLocaleDateString('ko-KR'):'';row.className='saved-row';button.className='saved-open';button.title=item.cwd||'';button.append(Object.assign(document.createElement('strong'),{textContent:item.title}),Object.assign(document.createElement('small'),{textContent:`${profiles[item.provider]||item.provider} · ${item.cwd}${date?` · ${date}`:''}`}));button.onclick=()=>createSession(item.provider,item);remove.className='saved-delete';remove.textContent='×';remove.title=`${item.title} 영구 삭제`;remove.setAttribute('aria-label',`${item.title} 영구 삭제`);remove.onclick=async()=>{if(remove.disabled)return;remove.disabled=true;try{await deleteSaved(item);}catch(failure){state(failure.message||'대화를 삭제하지 못했습니다.',true);toast(failure.message||'대화를 삭제하지 못했습니다.');}finally{remove.disabled=false;}};row.append(button,remove);return row;})); }
-function renderProjects() { const row=$('#project-row'),select=$('#project-select'); if(!row||!select)return; if(!projects.length){row.hidden=true;return;} row.hidden=false; select.replaceChildren(...projects.map(item=>new Option(item.name+(item.path===currentProject?' (현재)':''),item.path,false,item.path===project))); }
+function renderProjects() {
+  const shown = projects.slice();
+  if (project && !shown.some(item => sameProject(item.path, project))) shown.unshift({ path:project, name:projectName(project) });
+  document.querySelectorAll('.project-select').forEach(select => { select.replaceChildren(...shown.map(item => new Option(item.name, item.path, false, sameProject(item.path, project)))); });
+  document.querySelectorAll('.new-project').forEach(label => { label.hidden = !shown.length; });
+}
 async function loadProjects(access=token) { try { const data=await api('projects',{},true,undefined,access); if(access!==token)return; projects=Array.isArray(data.projects)?data.projects:[]; currentProject=data.current||''; if(!project||!projects.some(item=>item.path===project))project=currentProject||projects[0]?.path||''; savePreference('orbit.remote.project',project); renderProjects(); renderSaved(); } catch { /* keep the last known project list on failure */ } }
 const secretProject = () => project || currentProject || '';
 const projectName = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
@@ -208,6 +278,8 @@ async function loadSessions(expected = run, preferred = '', access = token, dead
   if (expected !== run || access !== token) return false;
   const changed = !checkEpoch(data); available = true; sessions = Array.isArray(data.sessions) ? data.sessions : [];
   const keep = preferred || session; session = sessions.some(item => item.id === keep) ? keep : (sessions[0]?.id || ''); readySession = ''; seq = 0;
+  for (const item of sessions) if (!seenSeq.has(item.id)) seenSeq.set(item.id, item.seq ?? 0);
+  { const front = sessions.find(item => item.id === session); if (front) seenSeq.set(session, front.seq ?? 0); }
   renderTabs(); restoreDraft();
   if (!session) { $('#reconnect').hidden = true; controls(); state('실행 중인 터미널이 없습니다. 아래에서 새로 시작하세요.'); return false; }
   const loaded = await snapshot(expected, session, access, deadline); if (loaded) state(changed ? 'PC가 다시 시작되어 연결을 복원했습니다.' : '연결됨'); return loaded;
@@ -256,7 +328,7 @@ async function refresh(startup = false) {
 }
 async function selectSession(id) {
   if (!id || id === session) return;
-  saveDraft(); run++; pollAbort?.abort(); const expected = run, access = token; session = id; readySession = ''; renderTabs(); restoreDraft();
+  saveDraft(); run++; pollAbort?.abort(); const expected = run, access = token; session = id; readySession = ''; { const item = sessions.find(entry => entry.id === id); if (item) seenSeq.set(id, item.seq ?? 0); } renderTabs(); restoreDraft();
   try { if (await snapshot(expected, id, access)) poll(expected, access); }
   catch (failure) { if (expected === run && access === token) scheduleReconnect(expected, access, failure); }
 }
@@ -358,7 +430,8 @@ $('#secrets').ontoggle = () => { if ($('#secrets').open && token) loadSecrets().
 $('#secret-add').onclick = () => { showSecretForm(true); $('#secret-value').focus(); }; $('#secret-cancel').onclick = () => { showSecretForm(false); $('#secret-value').value = ''; $('#secret-name').value = ''; secretNamed = false; $('#secret-error').hidden = true; };
 $('#secret-name').oninput = () => { secretNamed = true; }; $('#secret-value').oninput = () => { if (!secretNamed) $('#secret-name').value = suggestSecretName($('#secret-value').value); }; $('#secret-names').replaceChildren(...commonSecretNames.map(name => new Option(name)));
 $('#secret-save').onclick = saveSecret; $('#secret-request-save').onclick = () => answerSecretRequest(true); $('#secret-request-deny').onclick = () => answerSecretRequest(false); $('#secret-value').onkeydown = $('#secret-name').onkeydown = event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); saveSecret(); } };
-$('#project-select').onchange = event => { project = event.target.value; savePreference('orbit.remote.project', project); renderSaved(); loadSecrets().catch(() => {}); };
+document.querySelectorAll('.project-select').forEach(select => { select.onchange = event => { project = event.target.value; savePreference('orbit.remote.project', project); renderProjects(); renderSaved(); loadSecrets().catch(() => {}); }; });
+setInterval(refreshStatuses, 4000);
 function closeMenu() { $('#menu-panel').hidden = true; }
 $('#menu-toggle').onclick = () => { $('#menu-panel').hidden = !$('#menu-panel').hidden; };
 $('#theme').onchange = event => { themeChoice = event.target.value; savePreference('orbit.remote.theme', themeChoice); applyTheme(); }; $('#readable-output').onscroll = () => { $('#latest').hidden = atOutputEnd(); };
@@ -371,7 +444,7 @@ if (hashProject) { try { project = decodeURIComponent(hashProject); savePreferen
 if (hashToken) { if (token !== hashToken) { invalidateComposeState(); serverEpoch = ''; } token = hashToken; if (!saveCredentials(token)) { token = ''; storageBlocked = true; } // Keep the login in the address while in a normal browser tab: iOS builds a home-screen app from the URL that is open when it is
   // added, and that app has its own empty storage, so a cleaned URL would create an app that can never sign in.
   if (standalone) history.replaceState(null, '', location.pathname); }
-document.addEventListener('visibilitychange', () => { if (document.hidden) { pollAbort?.abort(); clearTimeout(retryTimer); } else refresh(); }); window.addEventListener('online', refresh); window.addEventListener('offline', () => { available = false; controls(); state('오프라인', true); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { pollAbort?.abort(); clearTimeout(retryTimer); } else { refresh(); refreshStatuses(); } }); window.addEventListener('online', refresh); window.addEventListener('offline', () => { available = false; controls(); state('오프라인', true); });
 // The home-screen app has its own storage on iOS: point the manifest's start_url at this login so the installed app can sign in.
 function syncManifest() { const link = document.querySelector('link[rel="manifest"]'); if (link && token) link.href = '/mobile.webmanifest?login=' + encodeURIComponent(token); }
 // The login card is a real form (this browser or installed home-screen app has no login yet): the PC verifies the account and

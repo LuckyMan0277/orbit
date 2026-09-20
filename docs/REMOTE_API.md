@@ -12,7 +12,7 @@ PWA와 향후 모바일 앱이 공유할 작은 HTTP API입니다. 모든 API는
 
 | 경로 | 요청 | 응답의 주요 필드 |
 | --- | --- | --- |
-| `sessions` | `{}` | `sessions[]`: `id`, `name`, `pid`, `profile` |
+| `sessions` | `{}` | `sessions[]`: `id`, `name`, `pid`, `profile`, `project`(터미널을 연 프로젝트 폴더), `seq`(출력 순번), `lastOutputMs`(마지막 출력 후 경과 ms, 없으면 -1), `asking`(API 키 요청 대기 중) |
 | `terminals/create` | `{ profile, secrets? }` | 생성한 터미널의 `session` |
 | `secrets` | `{ project? }` | `keys[]`(`name`, `scope`)와 `names[]` (값은 포함하지 않음) |
 | `secrets/set` | `{ name, value, scope?, project? }` | `keys[]`, `names[]` |
@@ -27,6 +27,8 @@ PWA와 향후 모바일 앱이 공유할 작은 HTTP API입니다. 모든 API는
 3. `output`으로 뒤의 출력을 받습니다. 새 출력이 없으면 최대 25초 기다립니다.
 4. 출력의 렌더링이 끝났을 때만 마지막 `seq`를 반영합니다.
 5. `reset` 응답이면 새 snapshot을 받아 화면을 복구합니다. 오래된 출력 일부만 새 터미널에 재생하지 않습니다.
+
+휴대폰 화면은 `sessions`를 몇 초마다 다시 읽어 각 세션의 상태(작업 중 / 확인해 보세요 / 키 요청 / 대기)를 프로젝트별로 묶어 보여줍니다. 지금 보고 있는 세션의 출력·스냅샷에는 영향을 주지 않습니다. 새 세션을 열 때는 `terminals/create`의 `project`로 프로젝트를 고르고, 보고 있는 세션의 프로젝트가 기본값입니다.
 
 세션 전환·로그아웃 시 기존 요청을 취소하고 이전 응답을 버립니다. 입력은 자동 재시도하지 않습니다. 응답 유실 시 같은 명령이 두 번 실행될 수 있기 때문입니다.
 
