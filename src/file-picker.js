@@ -1,10 +1,11 @@
 import { call } from './bridge.js';
 import { el, icon } from './ui.js';
+import { joinPath } from './platform.js';
 
 let openPromise;
 
 const titleFor = mode => ({ folder: '작업 폴더 선택', file: '파일 열기', create: '새 파일 만들기' })[mode] || '파일 선택';
-const join = (folder, name) => `${folder.replace(/[\\/]$/, '')}\\${name}`;
+const join = joinPath;
 
 export function openFilePicker(options) {
   if (openPromise) return openPromise;

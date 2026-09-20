@@ -7,3 +7,6 @@ artifacts/
 Orbit.lnk
 .wrangler/
 .dev.vars
+mac/target/
+mac/app/icons/
+mac/app/gen/

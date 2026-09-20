@@ -137,3 +137,4 @@ dialog:has(.remote-host){width:340px;max-width:calc(100vw - 32px);padding:23px 2
 .topbar .external-connection[data-state=on]::after{background:#7bd3a1}.topbar .external-connection[data-state=error]::after{background:#f2c66d}
 .topbar .external-connection svg,.topbar .command-trigger svg,.topbar .toolbar-actions svg{width:16px;height:16px}
 .topbar .toolbar-actions{gap:8px}
+[data-platform=mac] .window-controls{display:none}

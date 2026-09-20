@@ -4,9 +4,11 @@ import { call, notify, on, isDesktop } from './bridge.js';
 import { commonSecretNames, secretNameProblem, suggestSecretName } from './secret-hints.js';
 import { sessionStatus, groupByProject, sessionName, sessionLabel } from './session-status.js';
 import { parseLocation } from './links.js';
+import { isMac, shellProfiles, hasModifier } from './platform.js';
 
 const state = { folder: '', terminals: [], terminalCreating: 0, active: null, terminalRoot: { type: 'group', id: 'group-root', tabs: [], active: null }, activeGroup: 'group-root', files: [], file: null, editor: null, editorModule: null, markdownEpoch: 0, hidden: false, savedSessions: [], savedAll: false, savedEpoch: 0, settings: { lowPower: true, fontSize: 13, defaultShell: 'powershell', theme: 'dark', recent: [], sidebarMode: 'sessions' }, loadingFile: false, panelsStale: true, focusedTerminal: '' };
 const profiles = { codex: { name: 'Codex', subtitle: 'OpenAI CLI', mark: '✳', class: 'codex' }, claude: { name: 'Claude', subtitle: 'Anthropic CLI', mark: '✺', class: 'claude' }, powershell: { name: 'PowerShell', subtitle: '기본 터미널', mark: '>_', class: 'shell' }, cmd: { name: 'CMD', subtitle: '명령 프롬프트', mark: '>_', class: 'shell' } };
+if (isMac) profiles.powershell = { name: '터미널', subtitle: '기본 셸', mark: '>_', class: 'shell' };
 const basename = path => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 const projectKey = path => String(path || '').toLowerCase();
 const projectName = path => state.client ? (state.client.names[path] || basename(path)) : (state.settings.projectNames?.[projectKey(path)] || basename(path));
@@ -534,7 +536,7 @@ function newSessionDialog({ profile, project, groupId } = {}) {
       card.dataset.profile = key; card.append(el('span', `choice-mark ${p.class}`, p.mark), el('strong', '', p.name), el('small', 'muted', p.subtitle)); agents.append(card); cards.push(card);
     }
     const shells = el('div', 'agent-shells');
-    for (const key of ['powershell', 'cmd']) {
+    for (const key of shellProfiles) {
       const p = profiles[key], b = button(p.name, 'secondary agent-choice', guard(async () => { $('#modal').close(); await launchSession(key, chosen); })); b.dataset.profile = key; shells.append(b); cards.push(b);
     }
     node.append(list, other, el('small', 'muted', '에이전트'), agents, shells, el('p', 'dialog-note', 'CLI는 PC에 설치되어 있고 PATH에서 실행 가능해야 합니다. 로그인과 권한 요청은 각 세션에서 진행합니다.'));
@@ -941,7 +943,7 @@ async function preferences(){
     const font=el('label','setting-row');const size=el('select');for(const n of [11,12,13,14,15,16,18,20]){const o=el('option','',`${n}px`);o.value=n;o.selected=n===state.settings.fontSize;size.append(o);}font.append(el('span','','터미널 글자 크기'),size);size.onchange=()=>{state.settings.fontSize=+size.value;apply();};
     const shell = el('label', 'setting-row');
     const shellSelect = el('select');
-    for (const [value, label] of [['powershell', 'PowerShell'], ['cmd', 'CMD']]) {
+    for (const [value, label] of [['powershell', profiles.powershell.name], ['cmd', 'CMD']].filter(([value]) => shellProfiles.includes(value))) {
       const option = el('option', '', label);
       option.value = value;
       option.selected = value === state.settings.defaultShell;
@@ -975,7 +977,7 @@ function commands(){
   dialog('명령 찾기',node=>{const input=el('input','dialog-input');input.placeholder='무엇을 할까요?';const list=el('div','command-list');const render=()=>{list.replaceChildren();for(const [label,key,action] of actions.filter(a=>a[0].toLowerCase().includes(input.value.toLowerCase()))){const b=button('','command-item',guard(async()=>{$('#modal').close();await action();}));b.append(el('span','',label),el('kbd','',key));list.append(b);}};input.oninput=render;input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();list.querySelector('button')?.click();}};node.append(input,list);render();});
 }
 document.addEventListener('keydown',e=>{
-  if(!e.ctrlKey || e.altKey)return;
+  if(!hasModifier(e) || e.altKey)return;
   if(document.querySelector('dialog[open]'))return;
   const action=e.shiftKey?({KeyT:()=>newTerminal(),KeyN:()=>newSessionDialog(),KeyD:toggleSplit,KeyW:()=>activeTerminal()&&closeTerminal(activeTerminal()),KeyF:terminalSearch})[e.code]:({KeyO:openFilePicker,KeyS:saveFile,KeyK:commands,KeyP:commands,KeyB:()=>app.classList.toggle('sidebar-hidden')})[e.code];
   if(action){e.preventDefault();guard(action)();}

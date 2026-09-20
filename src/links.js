@@ -3,7 +3,7 @@ const webHost = /www\.[\w-]+(?:\.[\w-]+)+|localhost(?![\w.-])|(?:\d{1,3}\.){3}\d
 const webTail = /(?::\d{1,5})?(?:[/?#][^\s<>"'`]*)?/.source;
 const webAddress = `(?<![\\w@.\\\\/-])(?:${webHost})${webTail}`;
 const webAddressOnly = new RegExp(`^(?:${webHost})${webTail}$`, 'i');
-const linkPattern = new RegExp(/https?:\/\/[^\s<>"`]+|file:\/\/[^\s<>"`]+/.source + '|' + webAddress + '|' + /"[^"\r\n]+"|'[^'\r\n]+'|(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])[^\s<>"'`|]+|(?:[\w.@-]+[\\/])+[\w.@()\[\]-]+(?::\d+(?::\d+)?)?|[\w.-]+\.[A-Za-z0-9]{1,12}(?::\d+(?::\d+)?)?/.source, 'gu');
+const linkPattern = new RegExp(/https?:\/\/[^\s<>"`]+|file:\/\/[^\s<>"`]+/.source + '|' + webAddress + '|' + /"[^"\r\n]+"|'[^'\r\n]+'|(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|~[\\/]|[\\/])[^\s<>"'`|]+|(?:[\w.@-]+[\\/])+[\w.@()\[\]-]+(?::\d+(?::\d+)?)?|[\w.-]+\.[A-Za-z0-9]{1,12}(?::\d+(?::\d+)?)?/.source, 'gu');
 // Return visible token offsets, preserving line/column suffixes and quoted paths.
 export function extractLinks(text) {
   const links = [];

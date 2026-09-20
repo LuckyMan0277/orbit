@@ -1,0 +1,69 @@
+name: mac
+
+on:
+  push:
+    branches: [main, mac-port]
+    paths: ['mac/**', 'src/**', 'scripts/build.mjs', 'assets/orbit-1024.png', 'package.json', '.github/workflows/mac.yml']
+  pull_request:
+    paths: ['mac/**', 'src/**', '.github/workflows/mac.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Host tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mac
+      # Real shells and files on a real macOS: terminals, encodings, conflict checks, history parsing.
+      - name: cargo test
+        working-directory: mac
+        run: cargo test -p orbit-core --no-fail-fast
+
+  app:
+    name: Orbit.app and .dmg
+    needs: core
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mac
+
+      - name: Web front end
+        run: |
+          npm ci
+          npm test
+          node scripts/build.mjs
+
+      - name: App icons
+        working-directory: mac/app
+        run: npx --yes @tauri-apps/cli@2 icon ../../assets/orbit-1024.png
+
+      - name: Build universal app
+        working-directory: mac/app
+        run: npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app,dmg
+
+      - name: What was built
+        run: |
+          find mac/target/universal-apple-darwin/release/bundle -maxdepth 3 -not -name '*.png' | head -30
+          lipo -info mac/target/universal-apple-darwin/release/bundle/macos/Orbit.app/Contents/MacOS/*
+          du -sh mac/target/universal-apple-darwin/release/bundle/macos/Orbit.app mac/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbit-macOS-unsigned
+          path: mac/target/universal-apple-darwin/release/bundle/dmg/*.dmg

@@ -35,3 +35,8 @@ test('web addresses without a scheme open as URLs, files stay files', () => {
   const text2 = 'edit main.py and README.md';
   for (const link of extractLinks(text2)) assert.equal(parseLocation(link.value).kind, 'path');
 });
+test('macOS-style paths keep their home marker and line coordinates', () => {
+  const values = extractLinks('see ~/notes/todo.md and /Users/me/app/main.js:12:3').map(link => link.value);
+  assert.deepEqual(values, ['~/notes/todo.md', '/Users/me/app/main.js:12:3']);
+  assert.deepEqual(parseLocation('/Users/me/app/main.js:12:3'), { kind: 'path', path: '/Users/me/app/main.js', line: 12, column: 3 });
+});

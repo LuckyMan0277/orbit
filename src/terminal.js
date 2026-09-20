@@ -7,6 +7,7 @@ import { call, notify, on } from './bridge.js';
 import { extractLinks } from './links.js';
 import { el, toast, confirm } from './ui.js';
 import { prepareTerminalPaste } from './terminal-paste.js';
+import { isMac } from './platform.js';
 
 const terminalTheme = name => name === 'light'
   ? { background: '#fcfbff', foreground: '#30313b', cursor: '#50307c', selectionBackground: '#d8cbed99', black: '#30313b', red: '#b43d57', green: '#2f754c', yellow: '#766016', blue: '#28629a', magenta: '#71499c', cyan: '#287278', white: '#5a5363', brightBlack: '#756d7e', brightRed: '#8f253f', brightGreen: '#1e653c', brightYellow: '#63500d', brightBlue: '#1d548b', brightMagenta: '#5f358f', brightCyan: '#17656d', brightWhite: '#3f3947' }
@@ -36,6 +37,9 @@ export class TerminalPane {
     this.term.attachCustomKeyEventHandler(event => {
       if (event.type !== 'keydown') return true;
       const key = event.code;
+      // On a Mac the command key is for the app: Cmd+C copies a selection, Cmd+V pastes (the browser's paste event does it), and
+      // the workspace shortcuts never reach the shell. Ctrl combinations below stay terminal input.
+      if (isMac && event.metaKey) { if (key === 'KeyC' && this.term.hasSelection()) this.copySelection(true); return false; }
       // Ctrl+C copies only while text is selected; otherwise it stays an interrupt for the CLI.
       if (event.ctrlKey && !event.shiftKey && !event.altKey && key === 'KeyC' && this.term.hasSelection()) { this.copySelection(true); return false; }
       if (event.ctrlKey && !event.altKey && (key === 'KeyC' && event.shiftKey || key === 'Insert' && !event.shiftKey)) { this.copySelection(true); return false; }
