@@ -1,5 +1,7 @@
 # Orbit
 
+소개 페이지: <https://luckyman0277.github.io/orbit/> (한국어: <https://luckyman0277.github.io/orbit/ko/>)
+
 Codex CLI, Claude Code CLI와 일반 셸을 한 창에서 쓰는 Windows 데스크톱 앱입니다. 터미널, 파일 편집기, 작업 폴더, 프롬프트 보관함을 함께 제공하고, 휴대폰·노트북 등 어떤 기기에서든 계정으로 로그인해 같은 터미널을 이어서 쓸 수 있습니다.
 
 호스트는 C# / WinForms, 화면은 WebView2 하나, 터미널은 Windows ConPTY + xterm.js입니다. 백그라운드 색인·감시·상시 실행 런타임 없이 가볍게 동작하도록 설계했습니다.

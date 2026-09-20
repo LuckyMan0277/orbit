@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit – Claude Code and Codex in one Windows window</title>
+<meta name="description" content="Orbit is a free, lightweight Windows app that runs Claude Code, Codex CLI and your shell side by side, keeps API keys out of AI chats, and lets you continue the same terminals from your phone or tablet.">
+<link rel="canonical" href="https://luckyman0277.github.io/orbit/">
+<link rel="alternate" hreflang="en" href="https://luckyman0277.github.io/orbit/">
+<link rel="alternate" hreflang="ko" href="https://luckyman0277.github.io/orbit/ko/">
+<link rel="alternate" hreflang="x-default" href="https://luckyman0277.github.io/orbit/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#15171c">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Orbit">
+<meta property="og:title" content="Orbit – Claude Code and Codex in one Windows window">
+<meta property="og:description" content="Run Claude Code, Codex CLI and your shell across several projects at once. Free, lightweight, open source.">
+<meta property="og:url" content="https://luckyman0277.github.io/orbit/">
+<meta property="og:image" content="https://luckyman0277.github.io/orbit/og.png">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="ko_KR">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Orbit",
+  "alternateName": "Orbit Agent Workspace",
+  "description": "A lightweight Windows desktop app that runs Claude Code, Codex CLI and shells in one window, stores API keys encrypted, and lets you continue the same terminals from a phone or tablet browser.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Windows 10, Windows 11",
+  "url": "https://luckyman0277.github.io/orbit/",
+  "downloadUrl": "https://github.com/LuckyMan0277/orbit/releases/latest",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "LuckyMan0277", "url": "https://github.com/LuckyMan0277" },
+  "codeRepository": "https://github.com/LuckyMan0277/orbit"
+}
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="favicon.svg" alt="" width="30" height="30">Orbit</a>
+    <nav class="top-nav" aria-label="Primary">
+      <a href="#features">Features</a>
+      <a href="#remote">Phone &amp; tablet</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/LuckyMan0277/orbit">GitHub</a>
+      <a class="lang" href="ko/" hreflang="ko" lang="ko">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero" style="border-top:0">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">Agent workspace for Windows</p>
+      <h1>Claude Code, Codex and your shell — <em>one window</em>.</h1>
+      <p class="lede">Orbit runs your AI coding agents side by side across several projects, shows which session needs you, keeps API keys out of the chat, and lets you pick the same terminals up from your phone.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/LuckyMan0277/orbit/releases/latest">Download for Windows</a>
+        <a class="btn" href="https://github.com/LuckyMan0277/orbit">View on GitHub</a>
+      </div>
+      <p class="fine">Free and open source (MIT) · Windows 10 1809+ / Windows 11, x64 · no telemetry</p>
+    </div>
+    <div class="orbit-art" aria-hidden="true">
+      <svg viewBox="0 0 256 256" role="img">
+        <rect width="256" height="256" rx="52" fill="#15171c"/>
+        <g fill="none" stroke-linecap="round">
+          <g class="a"><ellipse cx="128" cy="128" rx="94" ry="54" stroke="#a995df" stroke-width="12" transform="rotate(-38 128 128)"/></g>
+          <g class="b"><ellipse cx="128" cy="128" rx="85" ry="61" stroke="#8273ae" stroke-width="8" opacity=".72" transform="rotate(40 128 128)"/></g>
+        </g>
+        <circle cx="128" cy="128" r="28" fill="#b8a1ed"/>
+        <circle cx="128" cy="128" r="13" fill="#15171c"/>
+        <circle cx="190" cy="66" r="10" fill="#d6c5ff"/>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Built around sessions, not windows</h2>
+    <p class="sub">If you run Claude Code or Codex on more than one project at a time, Orbit keeps them organised in a single place instead of a pile of terminal windows.</p>
+    <div class="grid">
+      <article class="card">
+        <h3>Sessions grouped by project</h3>
+        <p>Start a session by picking a project and an agent. The sidebar groups sessions per project, with a status dot for working, needs attention, idle and finished.</p>
+      </article>
+      <article class="card">
+        <h3>Real terminals</h3>
+        <p>Claude Code, Codex CLI, PowerShell and CMD run in Windows ConPTY with xterm.js. Split left/right or top/bottom, up to eight panes, and drag tabs to reorder.</p>
+      </article>
+      <article class="card">
+        <h3>Resume past conversations</h3>
+        <p>Search your saved Claude and Codex conversations and reopen one in its original working folder.</p>
+      </article>
+      <article class="card">
+        <h3>API key vault</h3>
+        <p>Keys are encrypted on your PC with Windows DPAPI and injected into new Claude and Codex terminals as environment variables. The AI never sees the value. Keys can be per project or global, and an agent can ask for one with <code>orbit-secret request</code>.</p>
+      </article>
+      <article class="card">
+        <h3>Files and editor</h3>
+        <p>File explorer with syntax highlighting for common languages, UTF-8 / UTF-16 / CP949 and LF / CRLF preserved, external-change detection and Markdown preview.</p>
+      </article>
+      <article class="card">
+        <h3>Clickable output</h3>
+        <p>File paths (including <code>file.js:12:3</code>), URLs and folders in terminal output open in the editor, browser or Explorer with a click.</p>
+      </article>
+    </div>
+    <p class="note"><strong>Lightweight by design.</strong> No background indexing, no file watchers and no always-on runtime. A C# / WinForms host with a single WebView2 view.</p>
+  </div>
+</section>
+
+<section id="remote">
+  <div class="wrap">
+    <span class="tag">Phone &amp; tablet</span>
+    <h2>Continue the same terminals from your phone</h2>
+    <p class="sub">Your commands still run on your PC. Orbit just lets a browser on another device attach to the terminals you already have open.</p>
+    <div class="two">
+      <div class="card">
+        <h3>How it works</h3>
+        <ol class="steps">
+          <li><div><b>Turn on external access</b><span>In Orbit, make this PC the host. It gets a public HTTPS address through Tailscale Funnel or a temporary Cloudflare tunnel.</span></div></li>
+          <li><div><b>Sign in from any device</b><span>Open the mobile page in a browser and log in with your Orbit account. No app install needed; add it to the home screen if you like.</span></div></li>
+          <li><div><b>Pick a session</b><span>Sessions are grouped by project with their status. Send input, read output in a phone-friendly view, or start a new Claude or Codex session.</span></div></li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>Good to know</h3>
+        <ul class="plain">
+          <li>The PC and Orbit must stay on; closing the browser does not stop your sessions.</li>
+          <li>Terminal traffic goes straight from the browser to your PC. The small account service only stores a password hash and your PC's current public address.</li>
+          <li>Remote access is off by default and can be cut instantly by disconnecting the account.</li>
+          <li>A native phone and tablet app is on the roadmap; today it is a mobile web page.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note">Details: <a href="https://github.com/LuckyMan0277/orbit/blob/main/docs/REMOTE.md">remote access guide</a> (Korean).</p>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <h2>Download</h2>
+    <p class="sub">Get <code>Orbit-Setup.exe</code> from the latest release. It installs per user under <code>%LocalAppData%\Programs\Orbit</code> without administrator rights and can be removed from Windows Settings.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/LuckyMan0277/orbit/releases/latest">Latest release on GitHub</a>
+    </div>
+    <div class="two" style="margin-top:24px">
+      <div class="card">
+        <h3>Requirements</h3>
+        <ul class="plain">
+          <li>Windows 10 1809+ or Windows 11, x64</li>
+          <li>.NET Framework 4.8 and the Microsoft Edge WebView2 Runtime</li>
+          <li>Claude Code and/or Codex CLI on your PATH to use those buttons (<a href="https://code.claude.com/docs/en/setup">Claude Code</a>, <a href="https://learn.chatgpt.com/docs/codex/cli">Codex CLI</a>). Orbit does not install or sign in to them for you.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Updates and privacy</h3>
+        <ul class="plain">
+          <li>Orbit checks GitHub for a new version once when it starts, and updates only when you click the button.</li>
+          <li>No telemetry. Network use is limited to the update check and the remote access you turn on. See the <a href="https://github.com/LuckyMan0277/orbit/blob/main/docs/CODE_SIGNING.md">code signing and privacy policy</a>.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note"><strong>Unsigned releases.</strong> Code signing has not been set up yet, so Windows SmartScreen or Smart App Control may warn about or block the installer. Every release is built by GitHub Actions from a tagged commit of the public repository.</p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 LuckyMan0277 · <a href="https://github.com/LuckyMan0277/orbit/blob/main/LICENSE">MIT License</a></span>
+    <span><a href="https://github.com/LuckyMan0277/orbit">Source</a> · <a href="https://github.com/LuckyMan0277/orbit/releases">Releases</a> · <a href="https://github.com/LuckyMan0277/orbit/issues">Issues</a> · <a href="ko/">한국어</a></span>
+  </div>
+</footer>
+</body>
+</html>
