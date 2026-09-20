@@ -673,97 +673,68 @@ async function refreshClientProjects(){
 }
 // In client mode the workspace is this same UI; its file and terminal calls are forwarded to the host by the native side.
 const openProject = path => setFolder(path);
+// One button: make this PC the host. Tailscale is checked/installed on demand, the account is only asked for while this PC is
+// not linked yet, and phones/tablets join by scanning a QR (no account needed).
 async function remoteDevices(){
-  if(state.client){toast('호스트에 접속 중에는 외부 연결 설정을 열 수 없습니다.');return;}
-  let status=await call('remoteStatus'),tunnel=await call('remoteTunnelStatus').catch(()=>({})),tailscale=await call('remoteTailscaleStatus').catch(()=>({})),account=await call('accountStatus').catch(()=>({})),connecting=false,closed=false,connectionError=tailscale.error||tunnel.error||'',accountBusy=false,accountError=account.error||'';
-  let render=()=>{};const merge=result=>{if(result&&result.status)status=result.status;if(result&&result.tunnel)tunnel=result.tunnel;if(result&&result.tailscale)tailscale=result.tailscale;};
+  if(state.client){toast('호스트에 접속 중에는 열 수 없습니다.');return;}
+  let status=await call('remoteStatus'),tunnel=await call('remoteTunnelStatus').catch(()=>({})),tailscale=await call('remoteTailscaleStatus').catch(()=>({})),account=await call('accountStatus').catch(()=>({}));
+  let connecting=false,closed=false,connectionError=tailscale.error||tunnel.error||'',accountBusy=false,accountError='',qrUrl='',qrBusy=false,qrShownFor='',render=()=>{};
+  const merge=result=>{if(result&&result.status)status=result.status;if(result&&result.tunnel)tunnel=result.tunnel;if(result&&result.tailscale)tailscale=result.tailscale;};
   const unsub=on('remoteStatus',data=>{if(!closed){status=data.status;render();}});
   const tunnelUnsub=on('remoteTunnel',data=>{if(closed)return;tunnel=data.tunnel||{url:data.url,error:data.error,starting:false};connecting=!!tunnel.starting;if(data.error)connectionError=data.error;render();});
   const tailscaleUnsub=on('remoteTailscale',data=>{if(closed)return;tailscale=data.tailscale||{};connecting=!!tailscale.starting;if(tailscale.error)connectionError=tailscale.error;render();});
   const accountUnsub=on('remoteAccount',data=>{if(closed)return;account=data.account||{};accountError=account.error||'';render();});
   try { await dialog('외부 연결',node=>{
-    const intro=el('p','remote-intro'),summary=el('p','muted'),error=el('p','dialog-note'),setupNote=el('p','dialog-note'),setupActions=el('div','remote-actions remote-setup-actions'),accountSection=el('section','remote-account-section'),accountTitle=el('h3','','계정'),accountBox=el('div',''),advanced=document.createElement('details');advanced.className='remote-advanced';
-    const revisitSection=el('section','remote-revisit-section'),revisitTitle=el('h3','','다시 접속하기'),revisitUrl=el('input','dialog-input'),revisitRow=el('div','remote-actions'),revisitCopy=button('주소 복사','secondary',guard(async()=>{if(revisitUrl.value){await call('clipboard',{text:revisitUrl.value});toast('접속 주소를 복사했습니다.');}})),revisitNote=el('p','dialog-note','이 PC의 브라우저에서 이 주소를 북마크해 두면 바로 다시 열 수 있습니다.');
-    revisitUrl.readOnly=true;revisitUrl.placeholder='주소를 준비하는 중입니다.';revisitRow.append(revisitUrl,revisitCopy);revisitSection.append(revisitTitle,revisitRow,revisitNote);
-    // Account creation now turns the tunnel on by itself (see ensurePublicOrigin
-    // below), so this manual button is just a fallback for reconnecting or
-    // troubleshooting without touching the account -- it lives in 고급, not
-    // as a separate primary step.
-    const start=button('외부 주소 준비','secondary',guard(async()=>{if(connecting)return;connectionError='';connecting=true;render();try{merge(await call('remoteConnectStart',{port:49821}));state.settings.remoteAutoConnect=true;persist();}catch(e){connectionError=e.message;throw e;}finally{connecting=!!(tunnel.starting||tailscale.starting);if(!closed)render();}})),stop=button('외부 접속 끄기','secondary',guard(async()=>{connectionError='';state.settings.remoteAutoConnect=false;await persist();await call('remoteStop',{});status=await call('remoteStatus');tunnel=await call('remoteTunnelStatus').catch(()=>({}));tailscale=await call('remoteTailscaleStatus').catch(()=>({}));render();}));
-    start.id='remote-connect-start';
-    const email=el('input','dialog-input'),password=el('input','dialog-input');email.type='email';email.placeholder='이메일';email.autocomplete='username';password.type='password';password.placeholder='비밀번호 (8자 이상)';password.autocomplete='current-password';
-    const accountErrorNote=el('p','dialog-note');
-    const ensurePublicOrigin=async()=>{
-      if((status.url||'').indexOf('https:')===0)return true;
-      if(connecting)return false;
+    const box=el('div','remote-host'),errorNote=el('p','dialog-note remote-host-error');
+    const host=button('이 PC를 호스트로 지정','primary',guard(async()=>{
+      if(connecting)return;
       connectionError='';connecting=true;render();
       try{merge(await call('remoteConnectStart',{port:49821}));state.settings.remoteAutoConnect=true;persist();}
       catch(e){connectionError=e.message;}
       finally{connecting=!!(tunnel.starting||tailscale.starting);if(!closed)render();}
-      return (status.url||'').indexOf('https:')===0;
-    };
-    // Account creation implies wanting remote access, so it also turns on the
-    // tunnel (and its auto-reconnect-on-launch) instead of requiring a separate
-    // "외부 주소 준비" click first -- otherwise this would register a useless
-    // loopback address with the account service.
+    }));
+    host.id='remote-connect-start';
+    const install=button('Tailscale 설치','primary',guard(()=>call('remoteTailscaleSetup',{url:'https://tailscale.com/download/windows'})));
+    const login=button('Tailscale 로그인','primary',guard(()=>call('remoteTailscaleSetup',{url:tailscale.setupUrl})));
+    const release=button('해제','secondary',guard(async()=>{
+      connectionError='';state.settings.remoteAutoConnect=false;await persist();await call('remoteStop',{});
+      status=await call('remoteStatus');tunnel=await call('remoteTunnelStatus').catch(()=>({}));tailscale=await call('remoteTailscaleStatus').catch(()=>({}));qrUrl='';qrShownFor='';render();
+    }));
+    // Account: only while it is still missing; once linked nothing about it is shown.
+    const email=el('input','dialog-input'),password=el('input','dialog-input'),accountNote=el('p','dialog-note');
+    email.type='email';email.placeholder='이메일';email.autocomplete='username';password.type='password';password.placeholder='비밀번호 (8자 이상)';password.autocomplete='current-password';
     const runAccount=method=>guard(async()=>{
-      if(accountBusy)return;
-      accountBusy=true;accountError='';render();
-      try{
-        if(!await ensurePublicOrigin()){accountError='외부 주소를 아직 준비하지 못했습니다. 상태: '+(connectionError||'준비 중입니다. 잠시 후 다시 시도하세요.');return;}
-        const r=await call(method,{email:email.value,password:password.value});
-        if(!r.ok)accountError=r.error||'요청이 거부되었습니다.';else password.value='';
-      }finally{accountBusy=false;account=await call('accountStatus').catch(()=>account);render();}
+      if(accountBusy)return;accountBusy=true;accountError='';render();
+      try{const r=await call(method,{email:email.value,password:password.value});if(!r.ok)accountError=r.error||'요청이 거부되었습니다.';else password.value='';}
+      finally{accountBusy=false;account=await call('accountStatus').catch(()=>account);render();}
     });
-    const signUp=button('계정 만들기','secondary',runAccount('accountSignUp')),logIn=button('이 계정에 연결','primary',runAccount('accountLink'));
-    const unlink=button('연결 해제','secondary',guard(async()=>{accountBusy=true;render();try{await call('accountUnlink',{});}finally{accountBusy=false;account=await call('accountStatus').catch(()=>account);render();}}));
-    const serviceUrl=el('input','dialog-input');serviceUrl.placeholder='계정 서비스 주소 (예: https://orbit-account.example.workers.dev)';serviceUrl.value=account.serviceUrl||'';
-    serviceUrl.onchange=guard(async()=>{await call('accountServiceUrl',{url:serviceUrl.value.trim()});account=await call('accountStatus').catch(()=>account);render();});
-    const advancedSummary=el('summary','', '고급');const publicUrl=el('input','dialog-input');publicUrl.value=state.settings.remoteOrigin||'';publicUrl.placeholder='고정 공개 HTTPS 주소 (선택)';publicUrl.onchange=guard(async()=>{connectionError='';state.settings.remoteOrigin=publicUrl.value.trim();await call('settings',state.settings);await call('remotePublicOrigin',{url:state.settings.remoteOrigin});status=await call('remoteStatus');render();});
-    const fallback=button('임시 Cloudflare 연결 사용','secondary',guard(async()=>{if(connecting)return;connectionError='';connecting=true;render();try{merge(await call('remoteTunnelStart',{port:49821}));}finally{connecting=!!(tunnel.starting||tailscale.starting);render();}}));
-    const diagnosis=button('연결 상태 확인','secondary',guard(async()=>{const result=await call('remoteDiagnostic');connectionError=result.checkedUrl?(result.reachable?'공개 모바일 주소를 확인했습니다.':('공개 모바일 주소에 연결하지 못했습니다. '+(result.error||''))):'현재 공개 HTTPS 주소가 없습니다.';render();}));
-    const setup=button('Tailscale 로그인 계속','primary',guard(()=>call('remoteTailscaleSetup',{url:tailscale.setupUrl})));
-    const install=button('Tailscale 설치 열기','primary',guard(()=>call('remoteTailscaleSetup',{url:'https://tailscale.com/download/windows'})));
-    const advancedActions=el('div','remote-actions');advancedActions.append(start,fallback,diagnosis);
-    const stopNote=el('p','dialog-note remote-stop-note','외부 접속을 끄면 현재 원격 연결은 종료됩니다. 계정 연결은 그대로 남습니다.');
-    advanced.append(advancedSummary,el('p','dialog-note','계정 만들기·연결 버튼이 외부 주소를 알아서 켭니다. 아래는 수동 재연결, 계정 서비스 주소, 고정 공개 HTTPS 주소, 임시 Cloudflare 주소, 문제 해결용입니다.'),serviceUrl,publicUrl,advancedActions,revisitSection,stopNote,stop);
-    setupActions.append(setup,install);
+    const signUp=button('계정 만들기','secondary',runAccount('accountSignUp')),logIn=button('로그인','primary',runAccount('accountLink'));
+    const accountRow=el('div','remote-actions');accountRow.append(signUp,logIn);
+    const accountForm=el('div','remote-host-account');accountForm.append(email,password,accountRow,accountNote);
+    // QR for phones and tablets: scanning it opens this PC's web UI already signed in.
+    const qrBox=el('div','remote-qr'),qrNew=button('QR 새로 만들기','secondary',guard(async()=>{await loadQr(true);}));
+    const qrWrap=el('div','remote-host-qr');qrWrap.append(qrBox,qrNew);
+    const loadQr=async renew=>{
+      if(qrBusy)return;qrBusy=true;
+      try{const r=await call(renew?'remoteQrReset':'remoteQr');qrUrl=r.url;const {qrSvg}=await import('./qr.js');qrBox.innerHTML=qrSvg(qrUrl);qrShownFor=status.url||'';}
+      catch(e){connectionError=e.message;qrUrl='';qrBox.replaceChildren();}
+      finally{qrBusy=false;if(!closed)render();}
+    };
     render=()=>{
       const https=(status.url||'').indexOf('https:')===0;
       const waiting=connecting||tunnel.starting||tailscale.starting;
       const needsLogin=!https&&!!tailscale.setupUrl&&!waiting;
-      const needsInstall=!https&&!tailscale.setupUrl&&/설치되어 있지 않습니다/.test(tailscale.error||'')&&!waiting;
-      intro.textContent=https?'이 PC는 외부 접속을 받을 준비가 되었습니다.':'휴대폰이나 다른 기기에서 이 PC의 작업 공간을 열 수 있습니다.';
-      summary.textContent=waiting?(tunnel.starting?'임시 Cloudflare 주소를 준비하고 있습니다.':'외부 주소를 준비하고 있습니다.'):https?(account.linked?'다른 기기에서 같은 계정으로 로그인하면 이 PC로 바로 연결됩니다.':'아래에서 계정을 연결하면 다른 기기에서 로그인해 바로 붙을 수 있습니다.'):'아래 계정에서 만들기·연결을 누르면 외부 주소까지 자동으로 준비됩니다. Tailscale 승인이 필요하면 브라우저에서 마친 뒤 Orbit으로 돌아오세요.';
-      setupNote.hidden=!(needsLogin||needsInstall);
-      setupNote.textContent=needsLogin?'Tailscale 로그인이 필요합니다. 브라우저에서 승인한 뒤 Orbit으로 돌아오세요.':needsInstall?'Tailscale 설치가 필요합니다. 설치한 뒤 다시 외부 주소를 준비하세요.':'';
-      error.hidden=!connectionError;error.textContent=connectionError?'연결 상태: '+connectionError:'';
-      setup.hidden=!needsLogin;install.hidden=!needsInstall;setupActions.hidden=!(needsLogin||needsInstall);
-      start.disabled=waiting;start.textContent=waiting?'외부 주소 준비 중…':https?'외부 주소 새로고침':'외부 주소 준비';
-      stop.disabled=!status.enabled;
-      webSection.hidden=!account.linked;webUrl.value=account.serviceUrl||DEFAULT_ACCOUNT_SERVICE;
-      revisitSection.hidden=!https;revisitUrl.value=status.url||'';revisitCopy.disabled=!https;
-      accountBox.replaceChildren();
-      if(account.linked){
-        const row=el('div','remote-account-row'),details=el('div','');
-        details.append(el('strong','',account.email),el('small','','이 PC에 연결됨'));
-        unlink.disabled=accountBusy;
-        row.append(details,unlink);
-        accountBox.append(row);
-      } else {
-        email.disabled=accountBusy;password.disabled=accountBusy;signUp.disabled=accountBusy;logIn.disabled=accountBusy;
-        const row=el('div','remote-actions');row.append(signUp,logIn);
-        accountBox.append(email,password,row);
-      }
-      accountErrorNote.hidden=!accountError;accountErrorNote.textContent=accountError;
-      accountBox.append(accountErrorNote);
+      const needsInstall=!https&&!tailscale.setupUrl&&/설치되어 있지 않습니다/.test((tailscale.error||'')+' '+connectionError)&&!waiting;
+      host.disabled=waiting||https;host.textContent=waiting?'지정하는 중…':https?'이 PC는 호스트입니다':'이 PC를 호스트로 지정';
+      install.hidden=!needsInstall;login.hidden=!needsLogin;release.hidden=!(status.enabled||https);
+      errorNote.hidden=!connectionError||https;errorNote.textContent=connectionError;
+      accountForm.hidden=!(https&&!account.linked);
+      email.disabled=password.disabled=signUp.disabled=logIn.disabled=accountBusy;
+      accountNote.hidden=!accountError;accountNote.textContent=accountError;
+      qrWrap.hidden=!https;
+      if(https&&qrShownFor!==status.url&&!qrBusy)loadQr(false);
     };
-    const clientSection=el('section','remote-account-section'),clientOpen=button('다른 PC에 접속','primary',()=>{$('#modal').close('client');showLoginScreen();});
-    clientSection.append(el('h3','','다른 PC에 접속'),el('p','dialog-note','같은 계정을 연결해 둔 다른 PC를 이 앱에서 엽니다. 이 PC를 접속받는 PC로 등록하지 않으며 Tailscale도 필요 없습니다.'),clientOpen);
-    const webSection=el('section','remote-account-section'),webUrl=el('input','dialog-input'),webCopy=button('주소 복사','secondary',guard(async()=>{if(webUrl.value){await call('clipboard',{text:webUrl.value});toast('로그인 주소를 복사했습니다.');}}));
-    webUrl.readOnly=true;const webRow=el('div','remote-actions');webRow.append(webUrl,webCopy);
-    webSection.append(el('h3','','모바일·태블릿 (웹)'),el('p','dialog-note','휴대폰·태블릿은 앱 설치 없이 브라우저에서 이 주소를 열고 같은 계정으로 로그인하세요. 이 PC의 터미널을 보고 입력할 수 있습니다.'),webRow);
-    stop.classList.add('remote-stop');accountSection.append(accountTitle,accountBox);node.append(intro,summary,clientSection,accountSection,webSection,error,setupNote,setupActions,advanced);render();
+    box.append(host,install,login,errorNote,accountForm,qrWrap,release);node.append(box);render();
   });
   }finally{closed=true;unsub();tunnelUnsub();tailscaleUnsub();accountUnsub();}
 }

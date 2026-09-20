@@ -85,3 +85,10 @@ dialog{width:510px;max-width:calc(100vw - 40px);max-height:calc(100vh - 70px);bo
 
 /* Attached (host) terminals keep the host terminal size, so scroll instead of refitting. */
 .terminal-pane.attached{overflow:auto}
+
+/* External connection: a single host button, the QR, and (only while unlinked) the account fields. */
+dialog:has(.remote-host){width:340px;max-width:calc(100vw - 32px);padding:23px 27px}
+.remote-host{display:flex;flex-direction:column;gap:12px}.remote-host>button{height:40px}
+.remote-host-error{margin:0}.remote-host-account{display:flex;flex-direction:column;gap:8px}.remote-host-account .dialog-input{margin:0}
+.remote-host-qr{display:flex;flex-direction:column;align-items:center;gap:10px}
+.remote-qr{width:220px;height:220px;padding:10px;background:#fff;border-radius:12px}.remote-qr svg{display:block;width:100%;height:100%}

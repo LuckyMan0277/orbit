@@ -227,6 +227,10 @@ namespace Orbit {
                 case "terminalName": {string key=S(a,"session"),name=S(a,"name");if(sessions.ContainsKey(key))sessionNames[key]=TerminalName(name,"terminal");break;}
                 case "metrics":result=await Task.Run(()=>Measure());break;
                 case "remoteStatus":result=remote.Status();break;
+                case "remoteQr": case "remoteQrReset":
+                    // Local UI only (not in the desk allow-list): it hands out a token for this PC.
+                    if(!remote.Enabled||String.IsNullOrEmpty(remote.PublicOrigin))throw new InvalidOperationException("외부 주소가 아직 준비되지 않았습니다.");
+                    result=new {url=await Task.Run(()=>remote.QrUrl(method=="remoteQrReset"))};break;
                 case "remoteStart":result=new {url=remote.Start(N(a,"port",49821))};break;
                 case "remoteStop":tunnel.Stop();tailscale.Stop();remote.Stop();ClearRemoteRings();result=remote.Status();break;
                 case "remoteTunnelStart": tailscale.Stop();if(!remote.Enabled)remote.Start(N(a,"port",49821));tunnel.Start(remote.Port);result=new {status=remote.Status(),tunnel=tunnel.Status(),tailscale=tailscale.Status()};break;

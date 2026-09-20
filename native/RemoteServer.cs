@@ -25,6 +25,21 @@ namespace Orbit {
   public void SetPublicOrigin(string value){Uri u;PublicOrigin=Uri.TryCreate(value,UriKind.Absolute,out u)&&u.Scheme=="https"?u.GetLeftPart(UriPartial.Authority):null;Raise();}
   public string Url(){return OriginUrl()+"/mobile.html";}
   // What the account service must store: clients append /mobile.html and /api/v1/... themselves.
+  // The token behind the QR shown in the host UI. One QR token is valid at a time: rendering it again reuses it, renewing revokes the old one.
+  readonly object qrLock=new object();
+  public string QrUrl(bool renew){
+   lock(qrLock){
+    string file=Path.Combine(Path.GetDirectoryName(deviceFile),"remote-qr.token"),token=null;
+    try{if(File.Exists(file))token=File.ReadAllText(file).Trim();}catch{}
+    if(renew||String.IsNullOrEmpty(token)||!devices.ContainsKey(Hash(token))){
+     if(!String.IsNullOrEmpty(token))RevokeToken(token);
+     token=IssueAccountToken("QR 접속");
+     if(token==null)throw new IOException("기기 등록 정보를 저장하지 못했습니다.");
+     try{File.WriteAllText(file,token);}catch{}
+    }
+    return Url()+"#login="+Uri.EscapeDataString(token);
+   }
+  }
   public string OriginUrl(){return PublicOrigin??("http://127.0.0.1:"+Port);}
   public object Status(){return new {enabled=running,url=running?Url():null,devices=Devices()};}
   public object Devices(){return devices.Values.OrderByDescending(x=>x.Added).Select(x=>new {id=x.Hash,name=x.Name,added=x.Added.ToString("o")}).ToArray();}
