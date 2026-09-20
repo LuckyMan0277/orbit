@@ -25,11 +25,22 @@ export class TerminalPane {
     this.term.onResize(({ cols, rows }) => { if (this.started && !this.exited && !this.attached) notify('resize', { session: this.id, cols, rows }); });
     this.term.onBell(() => { if (document.hidden) document.title = '• 터미널 알림 — Orbit'; });
     this.element.addEventListener('pointerdown', onFocus);
-    this.element.addEventListener('contextmenu', event => { event.preventDefault(); void this.pasteClipboard(); });
+    // Right-click copies a selection, otherwise pastes (Windows Terminal behaviour).
+    this.element.addEventListener('contextmenu', event => { event.preventDefault(); if (this.term.hasSelection()) this.copySelection(true); else void this.pasteClipboard(); });
+    // Every paste (Ctrl+V, Shift+Insert, browser menu) arrives as a DOM paste event. Route it through paste() so xterm's own handler cannot paste a second time or turn newlines into Enter.
+    this.element.addEventListener('paste', event => {
+      event.preventDefault(); event.stopPropagation();
+      const text = event.clipboardData?.getData('text/plain');
+      if (text) void this.paste(text); else void this.pasteClipboard();
+    }, true);
     this.term.attachCustomKeyEventHandler(event => {
       if (event.type !== 'keydown') return true;
-      if (event.ctrlKey && event.shiftKey && event.code === 'KeyC') { call('clipboard', { text: this.term.getSelection() }).catch(e => toast(e.message, true)); return false; }
-      if (event.ctrlKey && event.code === 'KeyV') { void this.pasteClipboard(); return false; }
+      const key = event.code;
+      // Ctrl+C copies only while text is selected; otherwise it stays an interrupt for the CLI.
+      if (event.ctrlKey && !event.shiftKey && !event.altKey && key === 'KeyC' && this.term.hasSelection()) { this.copySelection(true); return false; }
+      if (event.ctrlKey && !event.altKey && (key === 'KeyC' && event.shiftKey || key === 'Insert' && !event.shiftKey)) { this.copySelection(true); return false; }
+      // Returning false lets the browser fire its paste event, which the listener above handles once.
+      if (event.ctrlKey && !event.altKey && key === 'KeyV' || event.shiftKey && !event.ctrlKey && key === 'Insert') return false;
       // Keep workspace shortcuts from becoming control characters in the CLI.
       if (event.ctrlKey && ['KeyO', 'KeyS', 'KeyK', 'KeyP', 'KeyB'].includes(event.code)) return false;
       if (event.ctrlKey && event.shiftKey && ['KeyT','KeyW','KeyD','KeyF'].includes(event.code)) return false;
@@ -92,6 +103,11 @@ export class TerminalPane {
     });
   }
   configure(settings) { this.term.options.fontSize = settings.fontSize; this.term.options.scrollback = settings.lowPower ? 500 : 2000; this.term.options.minimumContrastRatio = settings.theme === 'light' ? 4.5 : 1; this.term.options.theme = terminalTheme(settings.theme); if (!this.attached) this.fit.fit(); }
+  copySelection(clear) {
+    const text = this.term.getSelection();
+    if (!text) return;
+    call('clipboard', { text }).then(() => { if (clear) this.term.clearSelection(); }).catch(e => toast(e.message, true));
+  }
   async pasteClipboard() {
     if (this.exited || !this.started) return toast('실행 중인 터미널을 선택해 주세요.', true);
     const text = await call('clipboardRead');

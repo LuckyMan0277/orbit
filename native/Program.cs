@@ -173,7 +173,7 @@ namespace Orbit {
                 case "save":result=await Task.Run(()=>Files.Save(S(a,"path"),S(a,"content"),S(a,"encoding"),S(a,"revision",null)));break;
                 case "stat": {string p=Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder));result=new { path=p,directory=Directory.Exists(p),exists=Directory.Exists(p)||File.Exists(p) };break;}
                 case "external":OpenExternal(S(a,"path"),S(a,"cwd",initialFolder));break;
-                case "clipboard":Clipboard.SetText(S(a,"text"));break;
+                case "clipboard": {string text=S(a,"text");if(text.Length>0)Clipboard.SetDataObject(text,true,8,40);break;} // retries while another app holds the clipboard; SetText("") would throw
                 case "clipboardRead":result=Clipboard.ContainsText()?Clipboard.GetText():"";break;
                 case "windowMinimize":chrome.Minimize();break;
                 case "windowMaximize":chrome.ToggleMaximize();break;

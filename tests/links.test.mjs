@@ -22,3 +22,16 @@ test('Codex-style absolute paths normalize without losing coordinates', () => {
   assert.equal(parseLocation('file:///C:/my%2520project/orbit.exe').path, 'C:/my%20project/orbit.exe');
   assert.equal(parseLocation('reference%20note.txt').path, 'reference note.txt');
 });
+test('web addresses without a scheme open as URLs, files stay files', () => {
+  const text = '서버 localhost:3000/app, www.example.co.kr 및 example.com/a?b=1 접속. 127.0.0.1:8080 mail a@b.com';
+  const values = extractLinks(text).map(link => link.value);
+  assert.deepEqual(values.slice(0, 4), ['localhost:3000/app', 'www.example.co.kr', 'example.com/a?b=1', '127.0.0.1:8080']);
+  assert.ok(!values.includes('b.com'));
+  assert.deepEqual(parseLocation('localhost:3000/app'), { kind: 'url', path: 'http://localhost:3000/app' });
+  assert.deepEqual(parseLocation('127.0.0.1:8080'), { kind: 'url', path: 'http://127.0.0.1:8080' });
+  assert.deepEqual(parseLocation('www.example.com'), { kind: 'url', path: 'https://www.example.com' });
+  assert.deepEqual(parseLocation('example.dev/docs'), { kind: 'url', path: 'https://example.dev/docs' });
+  for (const file of ['main.py', 'README.md', 'src/app.js:12', 'v1.2.3', 'C:\a\b.com']) assert.equal(parseLocation(file).kind, 'path', file);
+  const text2 = 'edit main.py and README.md';
+  for (const link of extractLinks(text2)) assert.equal(parseLocation(link.value).kind, 'path');
+});
