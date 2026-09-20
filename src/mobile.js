@@ -37,7 +37,13 @@ function applyTheme() {
   $('#theme').value = themeChoice;
   term.options.theme = light ? { background:'#ffffff', foreground:'#302d38', cursor:'#7958ae', selectionBackground:'#dcd3ef' } : { background:'#111118', foreground:'#e5e2ef', cursor:'#cbb8ff', selectionBackground:'#57466f' };
 }
-function updateViewport() { document.documentElement.style.setProperty('--app-height', `${visualViewport?.height || innerHeight}px`); }
+// iOS Safari does not resize the layout when the keyboard opens: it shrinks the visual viewport and scrolls the page so the focused
+// field stays visible. Keep the app pinned to the visible area (height and top offset) so the header never scrolls away.
+function updateViewport() {
+  const root = document.documentElement.style, vv = visualViewport;
+  root.setProperty('--app-height', `${vv?.height || innerHeight}px`);
+  root.setProperty('--app-top', `${vv?.offsetTop || 0}px`);
+}
 async function api(path, body = {}, auth = true, signal, accessToken = token, timeout = 12000) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -283,7 +289,7 @@ $('#project-select').onchange = event => { project = event.target.value; savePre
 function closeMenu() { $('#menu-panel').hidden = true; }
 $('#menu-toggle').onclick = () => { $('#menu-panel').hidden = !$('#menu-panel').hidden; };
 $('#theme').onchange = event => { themeChoice = event.target.value; savePreference('orbit.remote.theme', themeChoice); applyTheme(); }; $('#readable-output').onscroll = () => { $('#latest').hidden = atOutputEnd(); };
-visualViewport?.addEventListener('resize', updateViewport); window.addEventListener('resize', updateViewport); matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice === 'system') applyTheme(); });
+visualViewport?.addEventListener('resize', updateViewport); visualViewport?.addEventListener('scroll', updateViewport); document.addEventListener('focusin', () => { updateViewport(); setTimeout(updateViewport, 300); }); document.addEventListener('focusout', () => setTimeout(() => { scrollTo(0, 0); updateViewport(); }, 100)); window.addEventListener('resize', updateViewport); matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice === 'system') applyTheme(); });
 const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 const hashToken = parseLoginToken(location.href);
 // The desktop app's client mode opens a specific project of this PC via #project=.
