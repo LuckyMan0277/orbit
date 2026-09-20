@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
+using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -112,10 +114,168 @@ namespace Orbit {
                 try {p.Start();p.Resize(110,32);p.Write("echo ORBIT_PTY_OK\r\n");if(!marker.WaitOne(10000))throw new Exception("No terminal output: "+output);p.Write("exit\r\n");if(!done.WaitOne(10000))throw new Exception("Process exit did not finish");}
                 finally {p.Dispose();}
             });
+            test("secret vault encrypts values, keeps them per project and hands them out only by name",()=> {
+                string path=Path.Combine(dir,"secrets.dat"),value="sk-test-Secret-Value-123",projA=Path.Combine(dir,"project-a"),projB=Path.Combine(dir,"project-b"),subA=Path.Combine(projA,"src");
+                var vault=new SecretVault(path);
+                vault.Set("Test_Key","  "+value+"\r\n","global",null);
+                byte[] disk=File.ReadAllBytes(path);
+                if(Encoding.UTF8.GetString(disk).Contains(value)||Encoding.Unicode.GetString(disk).Contains(value)||Encoding.UTF8.GetString(disk).Contains("Test_Key"))throw new Exception("secret is stored in plain text");
+                var reloaded=new SecretVault(path);
+                if(String.Join(",",reloaded.Names(projA))!="Test_Key")throw new Exception("name was not persisted");
+                if(reloaded.Env(projA,new[]{"test_key"})["TEST_KEY"]!=value)throw new Exception("value was not restored, trimmed and matched case-insensitively");
+                // two projects at once: the same name holds a different value in each, and a key of one project never reaches the other
+                vault.Set("SHARED_KEY","all-projects-value","global",null);vault.Set("SHARED_KEY","project-a-value","project",projA);vault.Set("ONLY_B","b-value","project",projB);
+                if(vault.Env(projA,null)["SHARED_KEY"]!="project-a-value")throw new Exception("the project's own key must win over the all-projects one");
+                if(vault.Env(subA,null)["SHARED_KEY"]!="project-a-value")throw new Exception("a sub-folder of a project must belong to that project");
+                if(vault.Env(projB,null)["SHARED_KEY"]!="all-projects-value"||vault.Env(projB,null)["ONLY_B"]!="b-value")throw new Exception("project B did not get the shared key plus its own");
+                if(vault.Env(projA,null).ContainsKey("ONLY_B")||vault.Env(null,null).ContainsKey("ONLY_B")||vault.Env(Path.Combine(dir,"project-a-other"),null).ContainsKey("SHARED_KEY")&&vault.Env(Path.Combine(dir,"project-a-other"),null)["SHARED_KEY"]!="all-projects-value")throw new Exception("a key leaked into another project");
+                if(!vault.Has("only_b",projB)||vault.Has("ONLY_B",projA))throw new Exception("Has() ignores the project");
+                if(vault.List(projA).Length!=3)throw new Exception("list for a project should be its own keys plus the shared ones: "+new JavaScriptSerializer().Serialize(vault.List(projA)));
+                var again=new SecretVault(path);
+                if(again.Env(projA,null)["SHARED_KEY"]!="project-a-value"||again.Env(projB,null)["ONLY_B"]!="b-value")throw new Exception("project keys were not persisted");
+                if(!again.Delete("SHARED_KEY","project",projA)||again.Env(projA,null)["SHARED_KEY"]!="all-projects-value")throw new Exception("deleting a project key must fall back to the shared one");
+                foreach(string bad in new[]{"","1KEY","A B","A-B","PATH","comspec","ORBIT_ANY",new string('A',65)}) { bool rejected=false;try{vault.Set(bad,"x","global",null);}catch(InvalidOperationException){rejected=true;}if(!rejected)throw new Exception("invalid name accepted: "+bad); }
+                bool empty=false;try{vault.Set("EMPTY_KEY","  ","global",null);}catch(InvalidOperationException){empty=true;}if(!empty)throw new Exception("empty value accepted");
+                bool noProject=false;try{vault.Set("X_KEY","x","project","");}catch(InvalidOperationException){noProject=true;}if(!noProject)throw new Exception("a project key needs a project");
+                bool unknown=false;try{vault.Env(projA,new[]{"ONLY_B"});}catch(InvalidOperationException ex){unknown=!ex.Message.Contains(value);}if(!unknown)throw new Exception("a name from another project did not fail");
+                // the first version stored one flat list: it must come back as keys for all projects
+                string legacy=Path.Combine(dir,"legacy-secrets.dat");
+                File.WriteAllBytes(legacy,System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes("{\"OLD_KEY\":\"old-value\"}"),Encoding.UTF8.GetBytes("Orbit.Secrets.v1"),System.Security.Cryptography.DataProtectionScope.CurrentUser));
+                var old=new SecretVault(legacy);if(old.Env(projA,null)["OLD_KEY"]!="old-value"||old.Env(projB,null)["OLD_KEY"]!="old-value")throw new Exception("legacy flat secrets were not migrated to all projects");
+                old.Set("NEW_KEY","n","project",projA);if(new SecretVault(legacy).Env(projB,null).ContainsKey("NEW_KEY")||new SecretVault(legacy).Env(projA,null)["OLD_KEY"]!="old-value")throw new Exception("saving after migration lost data");
+                if(!vault.Delete("test_key","global",null)||Array.IndexOf(vault.Names(projB),"Test_Key")>=0)throw new Exception("delete failed");
+            });
+            test("ConPTY passes secrets only through the child's environment",()=> {
+                string probe="ORBIT_SECRET_PROBE",value="probe-value-123",root=Environment.GetEnvironmentVariable("SystemRoot");
+                var output=new StringBuilder();var marker=new ManualResetEvent(false);var done=new ManualResetEvent(false);ConPty p=null;string expected="["+value+"]["+root+"]";
+                p=new ConPty("secret-test",dir,"\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d /q",120,24,(id,text)=>{lock(output){output.Append(text);if(output.ToString().Contains(expected))marker.Set();}p.Acknowledge();},(id,code)=>done.Set(),new System.Collections.Generic.Dictionary<string,string>{{probe,value}});
+                try {p.Start();p.Write("echo [%"+probe+"%][%SystemRoot%]\r\n");if(!marker.WaitOne(10000))throw new Exception("child did not see the secret next to its normal environment: "+output);p.Write("exit\r\n");if(!done.WaitOne(10000))throw new Exception("Process exit did not finish");}
+                finally {p.Dispose();}
+                if(Environment.GetEnvironmentVariable(probe)!=null)throw new Exception("secret leaked into the host's own environment");
+            });
+            test("only Claude and Codex terminals receive stored keys on their own",()=> {
+                foreach(string ai in new[]{"claude","codex"})if(!AgentNote.GetsKeys(ai))throw new Exception(ai+" must receive the project's keys");
+                foreach(string plain in new[]{"powershell","cmd","","unknown"})if(AgentNote.GetsKeys(plain))throw new Exception(plain+" must not receive keys automatically");
+            });
+            test("AI start-up guides name the stored keys and stay safe as command-line arguments",()=> {
+                var names=new[]{"OPENAI_API_KEY","STRIPE_KEY"};string codex=AgentNote.Codex(names),claude=AgentNote.Claude(names),none=AgentNote.Codex(new string[0]);
+                if(!codex.Contains("OPENAI_API_KEY, STRIPE_KEY")||!claude.Contains("OPENAI_API_KEY, STRIPE_KEY")||!none.Contains("none yet"))throw new Exception("guide does not list the stored names");
+                foreach(string tool in new[]{"orbit-secret run --","orbit-secret request NAME","orbit-secret list"})if(!codex.Contains(tool)||!claude.Contains(tool))throw new Exception("guide misses "+tool);
+                // Codex receives it as one argument: a quote, %, &, |, <, >, ^, $, backtick or newline would be mangled by PowerShell or a cmd shim.
+                foreach(char bad in "\"'%&|<>^$`\r\n")if(codex.IndexOf(bad)>=0)throw new Exception("Codex guide contains an argument-unsafe character: "+(int)bad);
+                if(codex.Length>4000)throw new Exception("Codex guide is too long for a config override");
+            });
+            test("secret broker serves registered terminals and never carries a requested value",()=> {
+                string valueA="existing-value-1",valueB="requested-value-2";var vault=new SecretVault(Path.Combine(dir,"broker-secrets.dat"));vault.Set("EXISTING_KEY",valueA,"global",null);string projA=Path.Combine(dir,"proj-a"),projB=Path.Combine(dir,"proj-b");
+                var seen=new List<SecretRequest>();var closedIds=new List<string>();var broker=new SecretBroker(vault,r=>{lock(seen)seen.Add(r);},TimeSpan.FromSeconds(30),r=>{lock(closedIds)closedIds.Add(r.Id);});
+                string token=broker.Register("term-1",projA),other=broker.Register("term-2",projB),session="term-1";
+                var json=new JavaScriptSerializer();
+                Func<string,Dictionary<string,object>,int,List<Dictionary<string,object>>> talk=(tok,payload,count)=> {
+                    payload["token"]=tok;
+                    using(var c=new NamedPipeClientStream(".",broker.PipeName,PipeDirection.InOut)) {
+                        c.Connect(5000);var w=new StreamWriter(c,new UTF8Encoding(false)){AutoFlush=true};var r=new StreamReader(c,new UTF8Encoding(false));
+                        w.WriteLine(json.Serialize(payload));var replies=new List<Dictionary<string,object>>();
+                        for(int i=0;i<count;i++){string line=r.ReadLine();if(line==null)break;replies.Add(json.Deserialize<Dictionary<string,object>>(line));}
+                        return replies;
+                    }
+                };
+                if(!talk("not-a-token",new Dictionary<string,object>{{"op","list"}},1)[0].ContainsKey("error"))throw new Exception("unregistered token was accepted");
+                var listed=talk(token,new Dictionary<string,object>{{"op","list"}},1)[0];
+                if(json.Serialize(listed).Contains(valueA)||!json.Serialize(listed).Contains("EXISTING_KEY"))throw new Exception("list must return names only: "+json.Serialize(listed));
+                var env=(Dictionary<string,object>)talk(token,new Dictionary<string,object>{{"op","env"},{"names",new[]{"EXISTING_KEY"}}},1)[0]["env"];
+                if((string)env["EXISTING_KEY"]!=valueA)throw new Exception("env did not return the stored value for run");
+                if(!talk(token,new Dictionary<string,object>{{"op","env"},{"names",new[]{"NO_SUCH_KEY"}}},1)[0].ContainsKey("error"))throw new Exception("unknown name in env was not refused");
+                if((string)talk(token,new Dictionary<string,object>{{"op","request"},{"name","EXISTING_KEY"}},1)[0]["status"]!="exists")throw new Exception("requesting a stored name should report it exists");
+                // a request stays pending until the UI answers, and the answer never includes the value
+                var asked=System.Threading.Tasks.Task.Run(()=>talk(token,new Dictionary<string,object>{{"op","request"},{"name","REQUESTED_KEY"},{"reason","for a test"}},2));
+                for(int i=0;i<100&&seen.Count==0;i++)Thread.Sleep(50);
+                if(seen.Count!=1||seen[0].Name!="REQUESTED_KEY"||seen[0].Reason!="for a test")throw new Exception("request was not announced to the UI");
+                string pendingJson=json.Serialize(broker.Pending(session));if(!pendingJson.Contains("REQUESTED_KEY")||broker.Pending("term-2") is object[]&&((object[])broker.Pending("term-2")).Length!=0)throw new Exception("pending list is wrong: "+pendingJson);
+                if(seen[0].Project!=projA)throw new Exception("the request does not carry the project of the terminal that asked");
+                vault.Set("REQUESTED_KEY",valueB,"project",projA);
+                if(!broker.Answer(seen[0].Id,"saved"))throw new Exception("answer was not accepted");
+                lock(closedIds)if(!closedIds.Contains(seen[0].Id))throw new Exception("the closed callback did not fire for an answered request");
+                var askedReplies=asked.Result;if(askedReplies.Count!=2||(string)askedReplies[0]["status"]!="pending"||(string)askedReplies[1]["status"]!="saved"||json.Serialize(askedReplies).Contains(valueB))throw new Exception("request replies are wrong or carry the value: "+json.Serialize(askedReplies));
+                if(broker.Answer(seen[0].Id,"saved"))throw new Exception("a request was answered twice");
+                // another project's terminal, open at the same time, must not see the key that project A's terminal just stored
+                if(json.Serialize(talk(other,new Dictionary<string,object>{{"op","list"}},1)[0]).Contains("REQUESTED_KEY"))throw new Exception("a key stored for project A is listed in project B's terminal");
+                if(!talk(other,new Dictionary<string,object>{{"op","env"},{"names",new[]{"REQUESTED_KEY"}}},1)[0].ContainsKey("error"))throw new Exception("a key stored for project A was handed to project B's terminal");
+                if(!json.Serialize(talk(token,new Dictionary<string,object>{{"op","list"}},1)[0]).Contains("\"project\""))throw new Exception("list does not tag project-only keys");
+                // "saved" without the value in the vault counts as denied
+                seen.Clear();var ghost=System.Threading.Tasks.Task.Run(()=>talk(token,new Dictionary<string,object>{{"op","request"},{"name","GHOST_KEY"}},2));
+                for(int i=0;i<100&&seen.Count==0;i++)Thread.Sleep(50);broker.Answer(seen[0].Id,"saved");
+                if((string)ghost.Result[1]["status"]!="denied")throw new Exception("saved without a stored value was not treated as denied");
+                // releasing a terminal closes its token and its waiting prompts
+                seen.Clear();var closing=System.Threading.Tasks.Task.Run(()=>talk(other,new Dictionary<string,object>{{"op","request"},{"name","LATE_KEY"}},2));
+                for(int i=0;i<100&&seen.Count==0;i++)Thread.Sleep(50);broker.Release("term-2");
+                if((string)closing.Result[1]["status"]!="closed"||!talk(other,new Dictionary<string,object>{{"op","list"}},1)[0].ContainsKey("error"))throw new Exception("released terminal kept its token or prompt");
+                // the real command-line tool, when this build ships it
+                string tool=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"bin","orbit-secret.exe");
+                if(File.Exists(tool)) {
+                    Func<string,Process> start=arguments=> {
+                        var psi=new ProcessStartInfo(tool,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+                        psi.EnvironmentVariables["ORBIT_PIPE"]=broker.PipeName;psi.EnvironmentVariables["ORBIT_TERMINAL_AUTH"]=token;return Process.Start(psi);
+                    };
+                    Func<string,string[]> once=arguments=>{using(var p=start(arguments)){string o=p.StandardOutput.ReadToEnd(),e=p.StandardError.ReadToEnd();if(!p.WaitForExit(20000))throw new Exception("orbit-secret hung: "+arguments);return new[]{o,e,p.ExitCode.ToString()};}};
+                    var listOut=once("list");if(!listOut[0].Contains("EXISTING_KEY")||listOut[0].Contains(valueA))throw new Exception("orbit-secret list output is wrong: "+listOut[0]);
+                    var runOut=once("run -- cmd /c echo [%EXISTING_KEY%]");if(!runOut[0].Contains("["+valueA+"]"))throw new Exception("orbit-secret run did not give the child the secret: "+runOut[0]+runOut[1]);
+                    if(Environment.GetEnvironmentVariable("EXISTING_KEY")!=null)throw new Exception("secret leaked into the test process");
+                    var codeOut=once("run -- cmd /c exit 7");if(codeOut[2]!="7")throw new Exception("orbit-secret run did not pass on the exit code: "+codeOut[2]);
+                    var onlyOut=once("run --only EXISTING_KEY -- cmd /c echo [%EXISTING_KEY%]");if(!onlyOut[0].Contains("["+valueA+"]"))throw new Exception("run --only failed: "+onlyOut[0]+onlyOut[1]);
+                    foreach(bool save in new[]{true,false}) {
+                        seen.Clear();string name=save?"CLI_SAVED_KEY":"CLI_DENIED_KEY";
+                        using(var p=start("request "+name+" because tests")) {
+                            for(int i=0;i<200&&seen.Count==0;i++)Thread.Sleep(50);
+                            if(seen.Count!=1||seen[0].Name!=name)throw new Exception("orbit-secret request did not reach the UI");
+                            if(save)vault.Set(name,"cli-entered-value","project",projA);broker.Answer(seen[0].Id,save?"saved":"denied");
+                            string o=p.StandardOutput.ReadToEnd();p.StandardError.ReadToEnd();if(!p.WaitForExit(20000))throw new Exception("request hung");
+                            if(p.ExitCode!=(save?0:2)||(save&&!o.Contains("Saved"))||o.Contains("cli-entered-value"))throw new Exception("orbit-secret request result is wrong ("+p.ExitCode+"): "+o);
+                        }
+                    }
+                }
+                broker.Stop();
+            });
+            test("remote API stores secrets write-only and passes only names to new terminals",()=> {
+                int port=FreePort();var terminals=new TestSecretTerminals(Path.Combine(dir,"api-secrets.dat"));const string value="sk-remote-Secret-456";
+                using(var server=new RemoteServer(terminals,Path.Combine(dir,"secret-devices.json"))) {
+                    server.Start(port);string token=server.IssueAccountToken("test");
+                    Func<string,string,string,string> post=(path,body,auth)=>Raw(port,"POST /api/v1/"+path+" HTTP/1.1\r\nHost: 127.0.0.1:"+port+"\r\n"+(auth==null?"":"Authorization: Bearer "+auth+"\r\n")+"Content-Type: application/json\r\nContent-Length: "+Encoding.UTF8.GetByteCount(body)+"\r\n\r\n"+body);
+                    if(!post("secrets/set","{\"name\":\"API_KEY\",\"value\":\""+value+"\"}",null).StartsWith("HTTP/1.1 401",StringComparison.Ordinal))throw new Exception("unauthenticated secret write accepted");
+                    string saved=post("secrets/set","{\"name\":\"API_KEY\",\"value\":\""+value+"\"}",token);
+                    if(!saved.StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||!saved.Contains("API_KEY")||saved.Contains(value))throw new Exception("secret save reply is wrong or echoes the value: "+saved);
+                    string projectDir=(Path.Combine(dir,"api-project")).Replace("\\","\\\\");
+                    if(!post("secrets/set","{\"name\":\"PROJ_KEY\",\"value\":\"proj-value-1\",\"scope\":\"project\",\"project\":\""+projectDir+"\"}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal))throw new Exception("project-scoped secret was not stored");
+                    string inProject=post("secrets","{\"project\":\""+projectDir+"\"}",token),elsewhere=post("secrets","{}",token);
+                    if(!inProject.Contains("PROJ_KEY")||!inProject.Contains("\"scope\":\"project\"")||inProject.Contains("proj-value-1")||elsewhere.Contains("PROJ_KEY"))throw new Exception("project key visibility is wrong: "+inProject+" / "+elsewhere);
+                    if(!post("secrets/delete","{\"name\":\"PROJ_KEY\",\"scope\":\"project\",\"project\":\""+projectDir+"\"}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||post("secrets","{\"project\":\""+projectDir+"\"}",token).Contains("PROJ_KEY"))throw new Exception("project key was not deleted");
+                    string listed=post("secrets","{}",token);
+                    if(!listed.StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||!listed.Contains("API_KEY")||listed.Contains(value))throw new Exception("secret list is wrong or exposes a value: "+listed);
+                    if(!post("secrets/set","{\"name\":\"bad name\",\"value\":\"x\"}",token).StartsWith("HTTP/1.1 400",StringComparison.Ordinal))throw new Exception("invalid secret name accepted");
+                    if(!post("terminals/create","{\"profile\":\"claude\",\"secrets\":[\"API_KEY\"]}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||terminals.LastSecrets==null||String.Join(",",terminals.LastSecrets)!="API_KEY")throw new Exception("secret names did not reach terminal creation");
+                    if(!post("terminals/create","{\"profile\":\"claude\"}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||terminals.LastSecrets!=null)throw new Exception("a create without a secrets list must mean every stored secret (null), not none");
+                    if(!post("terminals/create","{\"profile\":\"claude\",\"secrets\":[]}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||terminals.LastSecrets==null||terminals.LastSecrets.Length!=0)throw new Exception("an explicit empty secrets list must stay empty");
+                    string pending=post("snapshot","{\"session\":\"s1\"}",token);
+                    if(!pending.StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||!pending.Contains("secretRequests")||!pending.Contains("req-1")||pending.Contains(value))throw new Exception("pending AI prompts were not delivered with the terminal snapshot: "+pending);
+                    if(!post("secrets/answer","{\"request\":\"req-1\",\"status\":\"saved\"}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||terminals.LastAnswer!="req-1:saved")throw new Exception("secret request answer did not reach the host: "+terminals.LastAnswer);
+                    if(!post("terminals/create","{\"profile\":\"claude\",\"secrets\":[\"MISSING_KEY\"]}",token).StartsWith("HTTP/1.1 400",StringComparison.Ordinal))throw new Exception("unknown secret did not fail terminal creation");
+                    if(!post("secrets/delete","{\"name\":\"API_KEY\"}",token).StartsWith("HTTP/1.1 200",StringComparison.Ordinal)||post("secrets","{}",token).Contains("API_KEY"))throw new Exception("secret was not deleted");
+                }
+            });
             File.WriteAllText(report,log.ToString());Directory.Delete(dir,true);return failed==0?0:1;
         }
         static int FreePort(){var l=new TcpListener(IPAddress.Loopback,0);l.Start();int port=((IPEndPoint)l.LocalEndpoint).Port;l.Stop();return port;}
         static string Raw(int port,string request){try{using(var c=new TcpClient()){c.ReceiveTimeout=5000;c.SendTimeout=5000;c.Connect(IPAddress.Loopback,port);using(var s=c.GetStream()){byte[] bytes=Encoding.UTF8.GetBytes(request);s.Write(bytes,0,bytes.Length);s.Flush();c.Client.Shutdown(SocketShutdown.Send);using(var reader=new StreamReader(s,Encoding.UTF8))return reader.ReadToEnd();}}}catch(IOException){return "";}}
-        sealed class TestTerminals:IRemoteTerminals {public object Sessions(){return new {sessions=new object[0]};}public object SavedSessions(){return new {sessions=new object[0]};}public object DeleteSavedSession(string provider,string id){return new {sessions=new object[0]};}public object Snapshot(string id){return new { };}public object Output(string id,long after,int timeout){return new { };}public object Create(string profile,string resumeId,string project=null){return new {session="test"};}public object Projects(){return new {projects=new object[0],current=""};}public void Input(string id,string data){}}
+        sealed class TestSecretTerminals:TestTerminals,IRemoteSecrets {
+            readonly SecretVault vault;public string[] LastSecrets=new string[0];
+            public TestSecretTerminals(string path){vault=new SecretVault(path);}
+            public object SecretNames(string project){return new {names=vault.Names(project),keys=vault.List(project)};}
+            public object SetSecret(string name,string value,string scope,string project){vault.Set(name,value,scope,project);return SecretNames(project);}
+            public object DeleteSecret(string name,string scope,string project){vault.Delete(name,scope,project);return SecretNames(project);}
+            public string LastAnswer;
+            public object Create(string profile,string resumeId,string project,string[] secrets){if(secrets!=null)vault.Env(project,secrets);LastSecrets=secrets;return new {session="test"};}
+            public object PendingSecretRequests(string session){return new[]{new {id="req-1",name="ASKED_KEY",reason="why"}};}
+            public bool AnswerSecretRequest(string request,string status){LastAnswer=request+":"+status;return true;}
+        }
+        class TestTerminals:IRemoteTerminals {public object Sessions(){return new {sessions=new object[0]};}public object SavedSessions(){return new {sessions=new object[0]};}public object DeleteSavedSession(string provider,string id){return new {sessions=new object[0]};}public object Snapshot(string id){return new { };}public object Output(string id,long after,int timeout){return new { };}public object Create(string profile,string resumeId,string project=null){return new {session="test"};}public object Projects(){return new {projects=new object[0],current=""};}public void Input(string id,string data){}}
     }
 }

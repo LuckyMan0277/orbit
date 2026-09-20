@@ -12,8 +12,9 @@ const terminalTheme = name => name === 'light'
   ? { background: '#fcfbff', foreground: '#30313b', cursor: '#50307c', selectionBackground: '#d8cbed99', black: '#30313b', red: '#b43d57', green: '#2f754c', yellow: '#766016', blue: '#28629a', magenta: '#71499c', cyan: '#287278', white: '#5a5363', brightBlack: '#756d7e', brightRed: '#8f253f', brightGreen: '#1e653c', brightYellow: '#63500d', brightBlue: '#1d548b', brightMagenta: '#5f358f', brightCyan: '#17656d', brightWhite: '#3f3947' }
   : { background: '#15171c', foreground: '#d5d9e2', cursor: '#b8a1ff', selectionBackground: '#7660ae70', black: '#252833', red: '#f38ba8', green: '#a6d7ad', yellow: '#e6ca8b', blue: '#8db8ee', magenta: '#c8aff0', cyan: '#93d6db', white: '#e4e7ee', brightBlack: '#7f8798' };
 export class TerminalPane {
-  constructor({ id, profile, cwd, resumeId, name, settings, openLink, onExit, onFocus, attach }) {
-    this.id = id; this.cwd = cwd; this.profile = profile; this.resumeId = resumeId || ''; this.name = name || profile; this.closed = false; this.exited = false; this.started = false; this.outputCount = 0;
+  constructor({ id, profile, cwd, resumeId, name, settings, openLink, onExit, onFocus, attach, secrets, onOutput }) {
+    // secrets: secret names only (undefined = every stored secret); the host resolves the values.
+    this.id = id; this.cwd = cwd; this.profile = profile; this.resumeId = resumeId || ''; this.secrets = secrets; this.name = name || profile; this.closed = false; this.exited = false; this.started = false; this.outputCount = 0;
     // Attached: a view of a terminal the host opened. It keeps the host terminal's size (never resizes it) and starts from the host's snapshot.
     this.attach = attach || null; this.attached = !!attach;
     this.element = el('div', attach ? 'terminal-pane attached' : 'terminal-pane');
@@ -61,7 +62,7 @@ export class TerminalPane {
     this.unsub = on('output', data => {
       if (data.session !== this.id) return;
       if (this.attached && data.seq && data.seq <= (this.lastProcessedSeq || 0)) return; // already part of the snapshot
-      this.outputCount += data.data.length;
+      this.outputCount += data.data.length; if (onOutput) onOutput();
       this.term.write(data.data, () => { this.lastProcessedSeq = data.seq || this.lastProcessedSeq || 0; notify('ack', { session: this.id }); });
     });
     this.unsnapshot = on('remoteSnapshot', data => { if(data.session === this.id) this.term.write('', () => notify('remoteSnapshot', { session: this.id, request:data.request, data: this.serialize.serialize(), seq: this.lastProcessedSeq || 0, cols: this.term.cols, rows: this.term.rows })); });
@@ -78,7 +79,7 @@ export class TerminalPane {
       return;
     }
     this.fit.fit();
-    const result = await call('createTerminal', { session: this.id, cwd: this.cwd, profile: this.profile, resumeId: this.resumeId, name: this.name, cols: this.term.cols, rows: this.term.rows });
+    const result = await call('createTerminal', { session: this.id, cwd: this.cwd, profile: this.profile, resumeId: this.resumeId, name: this.name, ...(this.secrets ? { secrets: this.secrets } : {}), cols: this.term.cols, rows: this.term.rows });
     this.started = true; this.pid = result.pid; this.focus();
   }
   focus() { requestAnimationFrame(() => { if (!this.closed && this.element.clientWidth) { if (!this.attached) this.fit.fit(); this.term.focus(); } }); }

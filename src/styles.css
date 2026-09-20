@@ -92,3 +92,48 @@ dialog:has(.remote-host){width:340px;max-width:calc(100vw - 32px);padding:23px 2
 .remote-host-error{margin:0}.remote-host-account{display:flex;flex-direction:column;gap:8px}.remote-host-account .dialog-input{margin:0}
 .remote-host-qr{display:flex;flex-direction:column;align-items:center;gap:10px}
 .remote-qr{width:220px;height:220px;padding:10px;background:#fff;border-radius:12px}.remote-qr svg{display:block;width:100%;height:100%}
+.secrets-open{position:relative;width:32px;height:32px;display:grid;place-items:center;padding:0;border:1px solid var(--line,#3a3e4b);border-radius:7px;background:transparent;color:inherit}.secrets-open:hover{border-color:var(--accent,#ad91e3)}.secrets-open:focus-visible{outline:2px solid var(--accent,#ad91e3);outline-offset:2px}.secrets-open svg{width:16px;height:16px}
+.secrets-count{position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--accent,#ad91e3);color:#1b1230;font-size:10px;font-weight:700;line-height:16px;text-align:center}.secrets-count[hidden]{display:none}
+.secret-list{display:flex;flex-direction:column;margin:10px 0 12px}.secret-list[hidden],.secret-form[hidden],.secret-add[hidden]{display:none}
+.secret-row{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line,#30333e)}.secret-row code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.secret-tag{padding:2px 8px;border-radius:9px;background:#2a2a36;color:var(--muted,#8891a1);font-size:11px;white-space:nowrap}[data-theme=light] .secret-tag{background:#ebe6f3}
+.secret-delete{padding:5px 8px;border-radius:6px;color:var(--muted,#8891a1);font-size:12px}.secret-delete:hover,.secret-delete.confirm{color:#f38ba8}.secret-delete.confirm{font-weight:700}
+.secret-form{display:flex;flex-direction:column;gap:8px;margin-top:8px}.secret-form .dialog-input,#modal .secret-scope{margin:0}.secret-form-actions{display:flex;gap:8px;justify-content:flex-end}.secret-add{width:100%}
+.secret-foot{display:block;margin-top:12px}.secret-ask-name{margin:0 0 4px;font-size:18px;font-weight:700;overflow-wrap:anywhere}
+.secret-asks{position:fixed;right:16px;bottom:44px;z-index:40;display:flex;flex-direction:column;gap:8px;width:min(340px,calc(100vw - 32px))}.secret-asks[hidden]{display:none}
+.secret-ask{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--accent,#ad91e3);border-radius:10px;background:#1d2028;box-shadow:0 10px 30px #0008}[data-theme=light] .secret-ask{background:#fbf9fe}
+.secret-ask-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}.secret-ask-text strong{overflow:hidden;text-overflow:ellipsis;font-size:13px}.secret-ask-text small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted,#8891a1);font-size:11px}
+.secret-ask-actions{display:flex;gap:6px}.secret-ask-actions button{padding:6px 12px;font-size:12px}
+.terminal-tab.asks-key .tab-indicator{background:var(--accent,#ad91e3);box-shadow:0 0 0 3px #ad91e344}
+/* Sessions: the sidebar is a list of running agent sessions grouped by project; a dot says what each is doing. */
+.new-session-button{display:flex;align-items:center;gap:9px;width:calc(100% - 24px);height:42px;margin:0 12px 10px;padding:0 11px;border:1px solid #69548f;border-radius:8px;background:#2a2339;color:#e1d3ff;font-size:13px;font-weight:650}.new-session-button:hover{background:#36284c;border-color:#ad91e3}.new-session-button kbd{margin-left:auto;color:#a99bc4;font-size:10px}.new-session-button svg{width:15px;height:15px}
+.sessions-panel{overflow:auto;padding:0 12px}.session-list{display:flex;flex-direction:column;gap:10px;padding-bottom:6px}
+.session-group-head{display:flex;align-items:center;gap:6px;padding:2px 4px 4px;color:#9aa3b3;font-size:11px}.session-group-head strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}
+.session-group-add{width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#8993a4}.session-group-add:hover{background:#2a2d37;color:#e0d5f7}.session-group-add svg{width:13px;height:13px}
+.session-row{display:flex;align-items:stretch;border-left:2px solid transparent;border-radius:6px}.session-row.active{background:#2a2439;border-left-color:#a68bd5}
+.session-row-open{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:8px 6px;color:#d5d9e2;font-size:12.5px;text-align:left;border-radius:6px}.session-row-open:hover{background:#242731}.session-row.active .session-row-open:hover{background:transparent}.session-row-open svg{width:14px;height:14px;flex:none}
+.session-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-status{color:#8993a4;font-size:10.5px;white-space:nowrap}
+.session-dot{width:8px;height:8px;flex:none;border-radius:50%;background:#697081}
+.session-row[data-status=working] .session-dot{background:#7bd3a1;animation:session-pulse 1.4s ease-in-out infinite}.session-row[data-status=working] .session-status{color:#7bd3a1}
+.session-row[data-status=attention] .session-dot{background:#f2c66d;box-shadow:0 0 0 3px #f2c66d33}.session-row[data-status=attention] .session-status{color:#f2c66d;font-weight:650}
+.session-row[data-status=ended]{opacity:.55}
+.session-row-close{width:26px;display:grid;place-items:center;border-radius:5px;color:#697081;opacity:0}.session-row:hover .session-row-close,.session-row-close:focus-visible{opacity:1}.session-row-close:hover{color:#f38ba8}.session-row-close svg{width:12px;height:12px}
+.session-add-folder{margin:2px 0 12px;padding:8px 6px;color:#8993a4;font-size:12px;text-align:left}.session-add-folder:hover{color:#e0d5f7}
+@keyframes session-pulse{50%{opacity:.35}}
+.terminal-tab[data-status=working] .tab-indicator{background:#7bd3a1;animation:session-pulse 1.4s ease-in-out infinite}.terminal-tab[data-status=attention] .tab-indicator{background:#f2c66d;box-shadow:0 0 0 3px #f2c66d33}.terminal-tab[data-status=ended] .tab-indicator{background:#697081}
+.project-choices{display:flex;flex-direction:column;gap:6px;max-height:190px;margin:6px 0 8px;overflow:auto}.project-other{width:100%;margin-bottom:16px}
+.project-choice{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:9px 12px;border:1px solid #373947;border-radius:7px;background:#20222b;text-align:left}.project-choice small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.project-choice.selected{border-color:#a68bd5;background:#2a2439}.project-choice.project-other{flex-direction:row;border-style:dashed;background:transparent;color:#a99bc4}
+.agent-choices{margin:6px 0 8px}.agent-choice:disabled{opacity:.45}.agent-shells{display:flex;gap:8px;margin-bottom:6px}
+[data-theme=light] .new-session-button{border-color:#b79fdc;background:#efe7fa;color:#4c346d}[data-theme=light] .new-session-button:hover{background:#e6d9f6}[data-theme=light] .session-row.active{background:#eadff7}[data-theme=light] .session-row-open{color:#4c4357}[data-theme=light] .session-row-open:hover{background:#f1ecf7}[data-theme=light] .session-group-head{color:#6a6374}[data-theme=light] .project-choice{border-color:#d5ccdf;background:#faf8fd}[data-theme=light] .project-choice.selected{border-color:#a68bd5;background:#efe7fa}
+/* Top bar: only what is needed at a glance. Project on the left; on the right five square icon buttons at one size, status as a dot. */
+.brand-home{width:100%;background:none;border:0;color:inherit;font-family:inherit;text-align:left;cursor:pointer}
+.topbar .breadcrumb{gap:8px}.topbar .breadcrumb>#breadcrumb-folder{max-width:300px;color:#d3d7e0;font-size:13px;font-weight:600}[data-theme=light] .topbar .breadcrumb>#breadcrumb-folder{color:#4a4356}
+.topbar-right{gap:8px}
+.topbar .external-connection:not(.update-available),.topbar .command-trigger,.topbar .secrets-open,.topbar .toolbar-actions .icon-button{position:relative;display:grid;place-items:center;width:32px;height:32px;padding:0;gap:0;border:1px solid var(--line,#3a3e4b);border-radius:7px;background:transparent;color:inherit}
+.topbar .external-connection:not(.update-available) small,.topbar .command-trigger kbd{display:none}
+.topbar .external-connection:not(.update-available):hover,.topbar .command-trigger:hover,.topbar .toolbar-actions .icon-button:hover{border-color:var(--accent,#ad91e3);background:transparent;color:inherit}
+.topbar .external-connection:not(.update-available)::after{content:'';position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:#697081}
+.topbar .external-connection[data-state=on]::after{background:#7bd3a1}.topbar .external-connection[data-state=error]::after{background:#f2c66d}
+.topbar .external-connection svg,.topbar .command-trigger svg,.topbar .toolbar-actions svg{width:16px;height:16px}
+.topbar .toolbar-actions{gap:8px}

@@ -24,7 +24,7 @@ namespace Orbit {
             Application.Run(new MainWindow(args));return Environment.ExitCode;
         }
     }
-    internal sealed partial class MainWindow : Form, IRemoteTerminals, IDeskBridge {
+    internal sealed partial class MainWindow : Form, IRemoteTerminals, IRemoteSecrets, IDeskBridge {
         private readonly WebView2 web=new WebView2();
         private readonly WindowChrome chrome;
         private CoreWebView2Environment environment;
@@ -42,6 +42,8 @@ namespace Orbit {
         private long nextSnapshotId;
         private RemoteServer remote;
         private RemoteAccount account;
+        private SecretVault vault;
+        private SecretBroker broker;
         private RemoteClientWindow.Session clientSession;
         // Last known terminal size, used to replay recent output for terminals without a UI pane.
         private readonly ConcurrentDictionary<string,int[]> sessionSizes=new ConcurrentDictionary<string,int[]>();
@@ -64,6 +66,7 @@ namespace Orbit {
             uiTest=args.Contains("--ui-test");remoteTest=args.Contains("--remote-test")||args.Contains("--remote-test-tunnel");remoteTestTunnel=args.Contains("--remote-test-tunnel");remoteTestPort=remoteTest?RemoteTestPort(args):49821;
             dataRoot=remoteTest ? Path.Combine(TestArtifacts.Root,"remote-test-profile") : uiTest ? Path.Combine(TestArtifacts.Root,"webview-profile") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"OrbitAgentDesktop");
             ApplyHostTheme(ReadSavedTheme());
+            vault=new SecretVault(Path.Combine(dataRoot,"secrets.dat"));broker=new SecretBroker(vault,AnnounceSecretRequest,null,ClosedSecretRequest);
             remote=new RemoteServer(this,Path.Combine(dataRoot,"remote-devices.json"));remote.Changed+=delegate { Send(new {type="remoteStatus",status=remote.Status()}); };
             account=new RemoteAccount(remote,Path.Combine(dataRoot,"account.json"));remote.AccountLogin=(email,password)=>account.VerifyLogin(email,password);account.Changed+=delegate { Send(new {type="remoteAccount",account=account.Status()}); };
             tunnel.Changed+=delegate(string url,string error){RefreshRemoteOrigin();if(!String.IsNullOrEmpty(url)&&remoteTestTunnel)try{File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),remote.Url()+"#login="+Uri.EscapeDataString(remote.IssueAccountToken("remote-test-tunnel")));}catch{}Send(new {type="remoteTunnel",tunnel=tunnel.Status(),url=url,error=error});};
@@ -77,7 +80,7 @@ namespace Orbit {
                     string msg=(dirty?"저장하지 않은 파일 변경 사항이 있습니다.\n":"")+(sessions.Count>0?"실행 중인 터미널과 하위 프로세스가 종료됩니다.\n":"")+"Orbit을 종료할까요?";
                     if(MessageBox.Show(this,msg,"Orbit 종료",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes) {e.Cancel=true;return;}
                 }
-                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
+                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();broker.Stop();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
             };
         }
         private async Task Initialize() {
@@ -199,24 +202,34 @@ namespace Orbit {
                         cwd=saved.Cwd;
                     }
                     if(!Directory.Exists(cwd))throw new DirectoryNotFoundException("작업 폴더를 찾을 수 없습니다.");
+                    // Claude and Codex terminals get the keys of the project they are opened in (plus the all-projects ones) by default; a plain shell gets none
+                    // unless asked, and uses "orbit-secret run". An explicit "secrets" list is taken literally. The project is fixed now, whatever the window shows later.
+                    var secretNames=SecretNames(a);
+                    var secretEnv=secretNames!=null?vault.Env(cwd,secretNames):AgentNote.GetsKeys(profile)?vault.Env(cwd,null):new Dictionary<string,string>();
+                    var terminalEnv=TerminalEnvironment(sid,cwd,secretEnv);string agentNote=profile=="claude"?WriteAgentNote(sid,secretEnv.Keys):null;
+                    string noteFlag=agentNote==null?"":" --append-system-prompt-file '"+agentNote.Replace("'","''")+"'";
+                    // Codex takes its guide as one config value: a TOML literal string, which needs the doubled quotes of a PowerShell literal.
+                    string codexFlag=profile=="codex"&&File.Exists(HelperPath)?" -c 'developer_instructions=''"+AgentNote.Codex(secretEnv.Keys)+"'''":"";
                     string shell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe");
                     string command="\""+shell+"\" -NoLogo -NoProfile -NoExit";
                     if(profile=="cmd")command="\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d";
                     else {
                         string script="[Console]::InputEncoding = New-Object System.Text.UTF8Encoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'; ";
                         if(profile=="codex" || profile=="claude") {
-                            if(String.IsNullOrEmpty(resumeId))script+="if (Get-Command "+profile+" -ErrorAction SilentlyContinue) { "+profile+" } else { Write-Host '"+profile+" CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
-                            else if(profile=="codex")script+="if (Get-Command codex -ErrorAction SilentlyContinue) { codex -C '"+cwd.Replace("'","''")+"' resume "+resumeId+" } else { Write-Host 'codex CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
-                            else script+="if (Get-Command claude -ErrorAction SilentlyContinue) { claude --resume "+resumeId+" } else { Write-Host 'claude CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
+                            if(profile=="codex")script+=CodexPathFallback;
+                            if(String.IsNullOrEmpty(resumeId))script+="if (Get-Command "+profile+" -ErrorAction SilentlyContinue) { "+profile+noteFlag+codexFlag+" } else { Write-Host '"+profile+" CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
+                            else if(profile=="codex")script+="if (Get-Command codex -ErrorAction SilentlyContinue) { codex -C '"+cwd.Replace("'","''")+"'"+codexFlag+" resume "+resumeId+" } else { Write-Host 'codex CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
+                            else script+="if (Get-Command claude -ErrorAction SilentlyContinue) { claude --resume "+resumeId+noteFlag+" } else { Write-Host 'claude CLI is not installed or is not on PATH.' -ForegroundColor Yellow }";
                         }
                         command+=" -EncodedCommand "+Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
                     }
                     outputRings[sid]=new OutputRing();if(owner!=null)sessionOwners[sid]=owner;sessionSizes[sid]=new[]{N(a,"cols",100),N(a,"rows",30)};
                     var terminal=new ConPty(sid,cwd,command,N(a,"cols",100),N(a,"rows",30),(key,chunk)=>{long seq=RecordOutput(key,chunk);EmitOutput(key,new {type="output",session=key,data=chunk,seq=seq},chunk.Length);},(key,code)=> {
+                        broker.Release(key);DeleteAgentNote(key);
                         if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { string exitOwner;sessionOwners.TryRemove(key,out exitOwner);int[] exitSize;sessionSizes.TryRemove(key,out exitSize);ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();EmitExit(key,exitOwner,new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
-                    });
+                    },terminalEnv);
                     if(!sessions.TryAdd(sid,terminal))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");sessionProfiles[sid]=profile;if(!String.IsNullOrEmpty(resumeId))sessionResumeIds[sid]=profile+":"+resumeId;sessionNames[sid]=TerminalName(S(a,"name"),profile);terminal.Start();result=new {pid=terminal.ProcessId};
-                    } finally { pendingTerminals.Remove(sid);if(!sessions.ContainsKey(sid)){string failedOwner;sessionOwners.TryRemove(sid,out failedOwner);} }
+                    } finally { pendingTerminals.Remove(sid);if(!sessions.ContainsKey(sid)){string failedOwner;sessionOwners.TryRemove(sid,out failedOwner);broker.Release(sid);DeleteAgentNote(sid);} }
                     break;
                 }
                 case "write":GetSession(S(a,"session")).Write(S(a,"data"));break;
@@ -226,6 +239,10 @@ namespace Orbit {
                 case "deleteSavedSession": result=await Task.Run(()=>DeleteSavedSession(S(a,"provider"),S(a,"id"),S(a,"cwd",initialFolder),S(a,"allWorkspaces")=="True"));break;
                 case "terminalName": {string key=S(a,"session"),name=S(a,"name");if(sessions.ContainsKey(key))sessionNames[key]=TerminalName(name,"terminal");break;}
                 case "metrics":result=await Task.Run(()=>Measure());break;
+                case "secretList":result=((IRemoteSecrets)this).SecretNames(S(a,"project"));break;
+                case "secretSet":result=((IRemoteSecrets)this).SetSecret(S(a,"name"),S(a,"value"),S(a,"scope"),S(a,"project"));break;
+                case "secretDelete":result=((IRemoteSecrets)this).DeleteSecret(S(a,"name"),S(a,"scope"),S(a,"project"));break;
+                case "secretAnswer":result=new {ok=((IRemoteSecrets)this).AnswerSecretRequest(S(a,"request"),S(a,"status"))};break;
                 case "remoteStatus":result=remote.Status();break;
                 case "remoteQr": case "remoteQrReset":
                     // Local UI only (not in the desk allow-list): it hands out a token for this PC.
@@ -317,7 +334,56 @@ namespace Orbit {
         }
         object IRemoteTerminals.Snapshot(string id) { if(!sessions.ContainsKey(id))throw new InvalidOperationException("terminal not found");if(sessionOwners.ContainsKey(id)) { OutputRing replayRing;if(!outputRings.TryGetValue(id,out replayRing))throw new InvalidOperationException("terminal not found");long replaySeq;string replay=replayRing.Replay(out replaySeq);int[] size;if(!sessionSizes.TryGetValue(id,out size))size=new[]{100,30};return new {seq=replaySeq,data=replay,cols=size[0],rows=size[1],items=new object[0]}; } string key=id+":"+Interlocked.Increment(ref nextSnapshotId);var request=new RemoteSnapshot();if(!remoteSnapshots.TryAdd(key,request))throw new InvalidOperationException("snapshot busy");try {Send(new {type="remoteSnapshot",session=id,request=key});if(request.Ready.WaitOne(3000))return new {seq=request.Seq,data=request.Data,cols=request.Cols,rows=request.Rows,items=new object[0]};throw new TimeoutException("snapshot timed out");}finally{RemoteSnapshot ignored;remoteSnapshots.TryRemove(key,out ignored);request.Ready.Dispose();} }
         object IRemoteTerminals.Output(string id,long after,int timeoutMs) { if(!sessions.ContainsKey(id))throw new InvalidOperationException("terminal not found");OutputRing r;if(!outputRings.TryGetValue(id,out r))throw new InvalidOperationException("terminal not found");return r.After(after,timeoutMs); }
-        object IRemoteTerminals.Create(string profile,string resumeId,string project) { SavedSession match=null;if(!String.IsNullOrEmpty(resumeId)){match=SessionHistory.List(initialFolder,true).FirstOrDefault(x=>x.Provider==profile&&x.Id.Equals(resumeId,StringComparison.OrdinalIgnoreCase));if(match==null)throw new InvalidOperationException("saved session is unavailable");} string key="create:"+Interlocked.Increment(ref nextSnapshotId);var request=new RemoteCreate();if(!remoteCreates.TryAdd(key,request))throw new InvalidOperationException("create busy");try{Send(new {type="remoteCreate",request=key,profile=profile,resumeId=resumeId,project=match==null?project:null,cwd=match==null?null:match.Cwd,title=match==null?null:match.Title});if(!request.Ready.WaitOne(10000))throw new TimeoutException("terminal creation timed out");if(!String.IsNullOrEmpty(request.Error))throw new InvalidOperationException(request.Error);if(String.IsNullOrEmpty(request.Session))throw new InvalidOperationException("terminal creation failed");return new {session=request.Session};}finally{RemoteCreate ignored;remoteCreates.TryRemove(key,out ignored);request.Ready.Dispose();} }
+        object IRemoteTerminals.Create(string profile,string resumeId,string project) { return ((IRemoteSecrets)this).Create(profile,resumeId,project,null); }
+        // keys: what this project can use, each tagged "global" (all projects) or "project"; names: the same without the tags.
+        object IRemoteSecrets.SecretNames(string project) { return new {names=vault.Names(project),keys=vault.List(project)}; }
+        object IRemoteSecrets.SetSecret(string name,string value,string scope,string project) { vault.Set(name,value,scope,project);return ((IRemoteSecrets)this).SecretNames(project); }
+        object IRemoteSecrets.DeleteSecret(string name,string scope,string project) { vault.Delete(name,scope,project);return ((IRemoteSecrets)this).SecretNames(project); }
+        // Only names travel through the UI to the terminal-creating call; createTerminal resolves them to values here on the host.
+        private static string[] SecretNames(Dictionary<string,object> a) { object v;var list=a.TryGetValue("secrets",out v)?v as System.Collections.IEnumerable:null;return list==null||v is string?null:list.Cast<object>().Select(x=>Convert.ToString(x)).Where(x=>!String.IsNullOrEmpty(x)).ToArray(); }
+        object IRemoteSecrets.PendingSecretRequests(string session) { return broker.PendingList(session).Select(r=>new {id=r.Id,name=r.Name,reason=r.Reason,project=r.Project,projectName=FolderName(r.Project),terminal=TerminalLabel(r.Session)}).ToArray(); }
+        private string TerminalLabel(string session) { string name;return sessionNames.TryGetValue(session,out name)?name:"터미널"; }
+        private static string FolderName(string path) { path=(path??"").TrimEnd('\\','/');int i=Math.Max(path.LastIndexOf('\\'),path.LastIndexOf('/'));return i>=0?path.Substring(i+1):path; }
+        bool IRemoteSecrets.AnswerSecretRequest(string request,string status) { return broker.Answer(request,status); }
+        // The Codex desktop app installs its CLI under ~/.codex/packages/standalone without always putting it on PATH; use the newest one only when PATH has none.
+        private const string CodexPathFallback="if (-not (Get-Command codex -ErrorAction SilentlyContinue)) { $orbitCodexBin = Get-ChildItem (Join-Path $env:USERPROFILE '.codex\\packages\\standalone\\releases') -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | ForEach-Object { Join-Path $_.FullName 'bin' } | Where-Object { Test-Path (Join-Path $_ 'codex.exe') } | Select-Object -First 1; if ($orbitCodexBin) { $env:Path = $orbitCodexBin + ';' + $env:Path } } ";
+        private string HelperPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"bin","orbit-secret.exe"); } }
+        // Environment of a new terminal: the chosen secrets, plus what orbit-secret needs to reach this window (only when the tool ships with this build).
+        private Dictionary<string,string> TerminalEnvironment(string session,string project,Dictionary<string,string> secrets) {
+            var env=new Dictionary<string,string>(secrets,StringComparer.OrdinalIgnoreCase);
+            if(!File.Exists(HelperPath))return env;
+            env["ORBIT_TERMINAL_AUTH"]=broker.Register(session,project);env["ORBIT_PIPE"]=broker.PipeName;
+            env["PATH"]=Path.GetDirectoryName(HelperPath)+";"+(Environment.GetEnvironmentVariable("PATH")??"");
+            return env;
+        }
+        // What an AI CLI is told at start-up so the user never has to explain the vault. It holds names only, never values.
+        private string WriteAgentNote(string session,IEnumerable<string> names) {
+            if(!File.Exists(HelperPath)||session.Length>64||!session.All(c=>Char.IsLetterOrDigit(c)||c=='-'))return null;
+            try {
+                string dir=Path.Combine(dataRoot,"agent-notes");Directory.CreateDirectory(dir);
+                foreach(string old in Directory.GetFiles(dir,"*.md"))if(File.GetLastWriteTimeUtc(old)<DateTime.UtcNow.AddDays(-1))try{File.Delete(old);}catch{}
+                string file=Path.Combine(dir,session+".md");
+                File.WriteAllText(file,AgentNote.Claude(names),new System.Text.UTF8Encoding(false));
+                return file;
+            } catch { return null; }
+        }
+        private void DeleteAgentNote(string session) { try { string file=Path.Combine(dataRoot,"agent-notes",session+".md");if(session.All(c=>Char.IsLetterOrDigit(c)||c=='-')&&File.Exists(file))File.Delete(file); } catch { } }
+        // An AI asked for a secret: show the user a private prompt where they can answer (this window, or the desktop client that owns the terminal).
+        // The message says which project and terminal asked, so with many terminals open the user knows what they are answering. It only flashes
+        // the taskbar: the window is never pulled forward over what the user is doing.
+        private void AnnounceSecretRequest(SecretRequest request) {
+            string owner;
+            var message=new {type="secretRequest",request=request.Id,session=request.Session,name=request.Name,reason=request.Reason,terminal=TerminalLabel(request.Session),project=request.Project,projectName=FolderName(request.Project)};
+            if(sessionOwners.TryGetValue(request.Session,out owner)){EmitTo(owner,message);return;}
+            Send(message);
+            if(!quitting&&IsHandleCreated)try{BeginInvoke(new Action(delegate{Win32.Flash(Handle);}));}catch(InvalidOperationException){}
+        }
+        // Answered (here, on a phone) or gone with its terminal: every screen drops the notification.
+        private void ClosedSecretRequest(SecretRequest request) {
+            string owner;var message=new {type="secretRequestClosed",request=request.Id};
+            if(sessionOwners.TryGetValue(request.Session,out owner))EmitTo(owner,message);else Send(message);
+        }
+        object IRemoteSecrets.Create(string profile,string resumeId,string project,string[] secrets) { SavedSession match=null;if(!String.IsNullOrEmpty(resumeId)){match=SessionHistory.List(initialFolder,true).FirstOrDefault(x=>x.Provider==profile&&x.Id.Equals(resumeId,StringComparison.OrdinalIgnoreCase));if(match==null)throw new InvalidOperationException("saved session is unavailable");} if(secrets!=null)vault.Env(match!=null?match.Cwd:(String.IsNullOrEmpty(project)?initialFolder:project),secrets);string key="create:"+Interlocked.Increment(ref nextSnapshotId);var request=new RemoteCreate();if(!remoteCreates.TryAdd(key,request))throw new InvalidOperationException("create busy");try{Send(new {type="remoteCreate",request=key,profile=profile,resumeId=resumeId,project=match==null?project:null,cwd=match==null?null:match.Cwd,title=match==null?null:match.Title,secrets=secrets});if(!request.Ready.WaitOne(10000))throw new TimeoutException("terminal creation timed out");if(!String.IsNullOrEmpty(request.Error))throw new InvalidOperationException(request.Error);if(String.IsNullOrEmpty(request.Session))throw new InvalidOperationException("terminal creation failed");return new {session=request.Session};}finally{RemoteCreate ignored;remoteCreates.TryRemove(key,out ignored);request.Ready.Dispose();} }
         object IRemoteTerminals.Projects() { string key="projects:"+Interlocked.Increment(ref nextSnapshotId);var request=new RemoteProjects();if(!remoteProjectsRequests.TryAdd(key,request))throw new InvalidOperationException("projects busy");try{Send(new {type="remoteProjects",request=key});if(!request.Ready.WaitOne(5000))throw new TimeoutException("projects timed out");return new {projects=request.List,current=request.Current};}finally{RemoteProjects ignored;remoteProjectsRequests.TryRemove(key,out ignored);request.Ready.Dispose();} }
         void IRemoteTerminals.Input(string id,string data) { GetSession(id).Write(data); }
         private sealed class RemoteSnapshot { public readonly ManualResetEvent Ready=new ManualResetEvent(false); public string Data=""; public long Seq; public int Cols,Rows; }

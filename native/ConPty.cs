@@ -36,7 +36,21 @@ namespace Orbit {
         [DllImport("user32.dll")] internal static extern bool SetProcessDpiAwarenessContext(IntPtr context);
         [DllImport("kernel32.dll")] internal static extern uint SetThreadExecutionState(uint flags);
         internal const uint ES_CONTINUOUS=0x80000000, ES_SYSTEM_REQUIRED=0x00000001;
+        // Taskbar flash until the window is brought forward: says "look here" without taking the keyboard focus from what the user is typing.
+        [StructLayout(LayoutKind.Sequential)] internal struct FLASHWINFO { public uint size; public IntPtr window; public uint flags, count, timeout; }
+        [DllImport("user32.dll")] internal static extern bool FlashWindowEx(ref FLASHWINFO info);
+        internal static void Flash(IntPtr window) { var info=new FLASHWINFO { size=(uint)Marshal.SizeOf(typeof(FLASHWINFO)),window=window,flags=15,count=uint.MaxValue };FlashWindowEx(ref info); }
         internal static void Check(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+        // Unicode environment block for CreateProcess: this process's variables with `extra` laid over them, sorted as Windows expects.
+        // The caller frees it with Marshal.FreeHGlobal. Values stay out of the command line, so other processes cannot read them there.
+        internal static IntPtr AllocEnvironment(System.Collections.Generic.IDictionary<string,string> extra) {
+            var merged=new System.Collections.Generic.SortedDictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            foreach(System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables()) merged[(string)e.Key]=(string)e.Value;
+            foreach(var pair in extra) merged[pair.Key]=pair.Value;
+            var text=new StringBuilder();
+            foreach(var pair in merged) text.Append(pair.Key).Append('=').Append(pair.Value).Append('\0');
+            return Marshal.StringToHGlobalUni(text.Append('\0').ToString());
+        }
         // Ties a helper child process (Tailscale/cloudflared) to Orbit's own lifetime: Windows
         // kills every process in the job the moment the job's last handle closes, which happens
         // automatically even if Orbit is killed abruptly (crash, Task Manager, force-kill) rather
@@ -62,9 +76,9 @@ namespace Orbit {
         private readonly Action<string,string> onData;
         private readonly Action<string,int> onExit;
 
-        public ConPty(string id, string cwd, string command, int cols, int rows, Action<string,string> data, Action<string,int> exit) {
+        public ConPty(string id, string cwd, string command, int cols, int rows, Action<string,string> data, Action<string,int> exit, System.Collections.Generic.IDictionary<string,string> env=null) {
             Id=id; onData=data; onExit=exit;
-            IntPtr readIn=IntPtr.Zero, writeIn=IntPtr.Zero, readOut=IntPtr.Zero, writeOut=IntPtr.Zero, attributes=IntPtr.Zero;
+            IntPtr readIn=IntPtr.Zero, writeIn=IntPtr.Zero, readOut=IntPtr.Zero, writeOut=IntPtr.Zero, attributes=IntPtr.Zero, environment=IntPtr.Zero;
             Win32.PROCESS_INFORMATION pi = new Win32.PROCESS_INFORMATION();
             bool attrInitialized=false;
             try {
@@ -83,7 +97,9 @@ namespace Orbit {
                 job=Win32.CreateJobObject(IntPtr.Zero,null); Win32.Check(job!=IntPtr.Zero);
                 var limit=new Win32.EXTENDED_LIMIT(); limit.basic.flags=0x2000;
                 Win32.Check(Win32.SetInformationJobObject(job,9,ref limit,Marshal.SizeOf(limit)));
-                Win32.Check(Win32.CreateProcess(null,new StringBuilder(command),IntPtr.Zero,IntPtr.Zero,false,0x00080004,IntPtr.Zero,cwd,ref si,out pi));
+                uint flags=0x00080004; // EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED
+                if(env!=null&&env.Count>0) { environment=Win32.AllocEnvironment(env); flags|=0x00000400; } // CREATE_UNICODE_ENVIRONMENT
+                Win32.Check(Win32.CreateProcess(null,new StringBuilder(command),IntPtr.Zero,IntPtr.Zero,false,flags,environment,cwd,ref si,out pi));
                 process=pi.process; ProcessId=pi.processId;
                 Win32.Check(Win32.AssignProcessToJobObject(job,process));
                 writer=new FileStream(new SafeFileHandle(writeIn,true),FileAccess.Write,4096,false); writeIn=IntPtr.Zero;
@@ -93,6 +109,7 @@ namespace Orbit {
             finally {
                 if (attrInitialized) Win32.DeleteProcThreadAttributeList(attributes);
                 if (attributes!=IntPtr.Zero) Marshal.FreeHGlobal(attributes);
+                if (environment!=IntPtr.Zero) Marshal.FreeHGlobal(environment);
                 foreach(var h in new []{readIn,writeIn,readOut,writeOut,pi.thread}) if(h!=IntPtr.Zero) Win32.CloseHandle(h);
             }
         }

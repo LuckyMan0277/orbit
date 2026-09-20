@@ -4,6 +4,7 @@ import './mobile.css';
 import { conversationDetails } from './remote-readable.js';
 import { composePackets, composeStageKey, epochChanged, sendComposerPackets } from './remote-input.js';
 import { remainingDeadlineMs } from './remote-connection.js';
+import { commonSecretNames, secretNameProblem, suggestSecretName } from './secret-hints.js';
 
 const $ = selector => document.querySelector(selector);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -18,6 +19,8 @@ function savePreference(key, value) { try { localStorage.setItem(key, value); } 
 let token = stored('orbit.remote.token');
 let serverEpoch = '', session = '', readySession = '', sessions = [], savedSessions = [], seq = 0;
 let projects = [], project = stored('orbit.remote.project'), currentProject = '';
+// Names only: the values live encrypted on the PC and are never sent back here.
+let secretKeys = [], secretNamed = false, shownRequest = '', shownRequestName = '', shownRequestProject = '';
 let run = 0, pollAbort = null, reconnecting = false, available = true, retryTimer = 0, connectionOpen = false;
 let view = stored('orbit.remote.view') || 'readable';
 let themeChoice = stored('orbit.remote.theme') || 'system';
@@ -96,6 +99,73 @@ function renderTabs() {
 function renderSaved() { const box=$('#saved-list'),query=($('#saved-filter')?.value||'').toLowerCase(),rows=savedSessions.filter(item=>(!project||(item.cwd||'').toLowerCase()===project.toLowerCase())&&`${item.title} ${item.cwd} ${item.provider}`.toLowerCase().includes(query)); if(!rows.length){box.replaceChildren(Object.assign(document.createElement('p'),{textContent:query?'일치하는 이전 대화가 없습니다.':'저장된 이전 대화가 없습니다.'}));return;} box.replaceChildren(...rows.map(item=>{const row=document.createElement('div'),button=document.createElement('button'),remove=document.createElement('button'),date=item.updated?new Date(item.updated).toLocaleDateString('ko-KR'):'';row.className='saved-row';button.className='saved-open';button.title=item.cwd||'';button.append(Object.assign(document.createElement('strong'),{textContent:item.title}),Object.assign(document.createElement('small'),{textContent:`${profiles[item.provider]||item.provider} · ${item.cwd}${date?` · ${date}`:''}`}));button.onclick=()=>createSession(item.provider,item);remove.className='saved-delete';remove.textContent='×';remove.title=`${item.title} 영구 삭제`;remove.setAttribute('aria-label',`${item.title} 영구 삭제`);remove.onclick=async()=>{if(remove.disabled)return;remove.disabled=true;try{await deleteSaved(item);}catch(failure){state(failure.message||'대화를 삭제하지 못했습니다.',true);toast(failure.message||'대화를 삭제하지 못했습니다.');}finally{remove.disabled=false;}};row.append(button,remove);return row;})); }
 function renderProjects() { const row=$('#project-row'),select=$('#project-select'); if(!row||!select)return; if(!projects.length){row.hidden=true;return;} row.hidden=false; select.replaceChildren(...projects.map(item=>new Option(item.name+(item.path===currentProject?' (현재)':''),item.path,false,item.path===project))); }
 async function loadProjects(access=token) { try { const data=await api('projects',{},true,undefined,access); if(access!==token)return; projects=Array.isArray(data.projects)?data.projects:[]; currentProject=data.current||''; if(!project||!projects.some(item=>item.path===project))project=currentProject||projects[0]?.path||''; savePreference('orbit.remote.project',project); renderProjects(); renderSaved(); } catch { /* keep the last known project list on failure */ } }
+const secretProject = () => project || currentProject || '';
+const projectName = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+// A key is for all projects or for one project. Pick which in the form; the scope list only appears when a project is selected.
+function fillScope(select, path) {
+  const wanted = select.value; select.replaceChildren();
+  if (!path) { select.hidden = true; return; }
+  select.hidden = false; select.append(new Option(`이 프로젝트만 (${projectName(path)})`, 'project'), new Option('모든 프로젝트', 'global')); if (wanted) select.value = wanted;
+}
+function showSecretForm(on) { $('#secret-form').hidden = !on; $('#secret-add').hidden = on; }
+function renderSecrets() {
+  const box = $('#secret-list');
+  $('#secret-summary').textContent = secretKeys.length ? `${secretKeys.length}개 저장됨` : '저장된 키 없음';
+  box.replaceChildren(...secretKeys.map(key => {
+    const row = document.createElement('div'), tag = document.createElement('span'), remove = document.createElement('button');
+    row.className = 'secret-row'; row.dataset.secret = key.name;
+    tag.className = 'secret-tag'; tag.textContent = key.scope === 'project' ? '이 프로젝트' : '모든 프로젝트';
+    remove.className = 'secret-delete'; remove.textContent = '삭제'; remove.setAttribute('aria-label', `${key.name} 삭제`);
+    remove.onclick = async () => {
+      if (!remove.classList.contains('confirm')) { remove.classList.add('confirm'); remove.textContent = '한 번 더'; setTimeout(() => { if (remove.isConnected) { remove.classList.remove('confirm'); remove.textContent = '삭제'; } }, 3000); return; }
+      remove.disabled = true;
+      try { applySecrets(await api('secrets/delete', { name:key.name, scope:key.scope, project:secretProject() })); toast('삭제했어요.'); }
+      catch (failure) { toast(failure.message || '삭제하지 못했어요.'); remove.disabled = false; }
+    };
+    row.append(Object.assign(document.createElement('strong'), { textContent:key.name }), tag, remove); return row;
+  }));
+  box.hidden = !secretKeys.length; if (!secretKeys.length) showSecretForm(true);
+  fillScope($('#secret-scope'), secretProject());
+}
+function applySecrets(data) { secretKeys = Array.isArray(data?.keys) ? data.keys : []; renderSecrets(); }
+async function loadSecrets(access = token) { const data = await api('secrets', { project:secretProject() }, true, undefined, access); if (access !== token) return; applySecrets(data); }
+async function saveSecret() {
+  const name = $('#secret-name').value.trim(), value = $('#secret-value').value, note = $('#secret-error'), submit = $('#secret-save');
+  note.hidden = true;
+  const problem = secretNameProblem(name) || (!value.trim() ? '키 값을 붙여넣어 주세요.' : '');
+  if (problem) { note.textContent = problem; note.hidden = false; return; }
+  submit.disabled = true;
+  try {
+    applySecrets(await api('secrets/set', { name, value, scope:secretProject() ? $('#secret-scope').value : 'global', project:secretProject() }));
+    $('#secret-value').value = ''; $('#secret-name').value = ''; secretNamed = false; showSecretForm(false); toast('저장했어요.');
+  } catch (failure) { note.textContent = failure.message || '저장하지 못했어요.'; note.hidden = false; }
+  finally { submit.disabled = false; }
+}
+// An AI running in the session asked for a key (orbit-secret request). The card names the project and terminal that asked; the value goes from
+// this field to the PC, never through the terminal.
+function showSecretRequests(list) {
+  const box = $('#secret-request'), request = Array.isArray(list) ? list[0] : null;
+  if (!request) { box.hidden = true; shownRequest = ''; $('#secret-request-value').value = ''; return; }
+  if (request.id === shownRequest) return;
+  shownRequest = request.id; shownRequestName = request.name; shownRequestProject = request.project || '';
+  $('#secret-request-title').textContent = request.name;
+  $('#secret-request-reason').textContent = (request.terminal && request.terminal.toLowerCase().startsWith((request.projectName || projectName(request.project) || '').toLowerCase()) ? request.terminal : [request.projectName || projectName(request.project), request.terminal].filter(Boolean).join(' · ')) + (request.reason ? ` — ${request.reason}` : '');
+  fillScope($('#secret-request-scope'), shownRequestProject);
+  $('#secret-request-value').value = ''; $('#secret-request-error').hidden = true; box.hidden = false;
+}
+async function answerSecretRequest(save) {
+  const id = shownRequest, input = $('#secret-request-value'), note = $('#secret-request-error');
+  if (!id) return;
+  if (save && !input.value.trim()) { note.textContent = '키 값을 붙여넣어 주세요.'; note.hidden = false; return; }
+  $('#secret-request-save').disabled = $('#secret-request-deny').disabled = true;
+  try {
+    if (save) await api('secrets/set', { name:shownRequestName, value:input.value, scope:shownRequestProject ? $('#secret-request-scope').value : 'global', project:shownRequestProject });
+    await api('secrets/answer', { request:id, status:save ? 'saved' : 'denied' });
+    input.value = ''; $('#secret-request').hidden = true;
+    if (save) { loadSecrets().catch(() => {}); toast('저장했어요. AI가 이어서 작업해요.'); }
+  } catch (failure) { note.textContent = failure.message || '전송하지 못했어요.'; note.hidden = false; }
+  finally { $('#secret-request-save').disabled = $('#secret-request-deny').disabled = false; }
+}
 async function deleteSaved(item) { if(!window.confirm(`“${item.title}” 대화를 영구 삭제합니다. 이 작업은 되돌릴 수 없습니다.`)) return false; const data=await api('saved-sessions/delete',{provider:item.provider,id:item.id});savedSessions=Array.isArray(data.sessions)?data.sessions:[];renderSaved();toast('대화를 영구 삭제했습니다.');return true; }
 async function loadSavedSessions(access=token) { const data=await api('saved-sessions',{},true,undefined,access);if(access!==token)return;savedSessions=Array.isArray(data.sessions)?data.sessions:[];renderSaved(); }
 function readableConversation() { return conversationDetails(term.buffer.active, sessions.find(item => item.id === session)?.profile || '', 700); }
@@ -121,7 +191,7 @@ async function snapshot(expected, id, access = token, deadline = 0) {
   if (!timeout) throw apiError('응답 시간이 초과되었습니다.');
   const data = await api('snapshot', { session:id }, true, undefined, access, timeout);
   if (!valid(expected, id, access)) return false;
-  checkEpoch(data); term.reset(); forceReadableFollow = true;
+  checkEpoch(data); showSecretRequests(data.secretRequests); term.reset(); forceReadableFollow = true;
   // It sizes the local renderer only; no resize is ever sent to the PC terminal.
   if (data.cols && data.rows) term.resize(data.cols, data.rows);
   await writeTerminal(data.data || ''); if (!valid(expected, id, access)) return false;
@@ -149,7 +219,7 @@ async function poll(expected = run, access = token) {
     try {
       const data = await api('output', { session:id, seq }, true, controller.signal, access, 30000);
       if (!valid(expected, id, access)) break;
-      checkEpoch(data);
+      checkEpoch(data); showSecretRequests(data.secretRequests);
       if (data.reset) { if (!await snapshot(expected, id, access)) break; continue; }
       const follow = atOutputEnd();
       for (const item of data.items || []) { await writeTerminal(item.data || ''); if (!valid(expected, id, access)) return; }
@@ -258,7 +328,7 @@ function parseLoginToken(value) {
   if (!match) return null;
   try { return decodeURIComponent(match[1]) || null; } catch { return null; }
 }
-function showWorkspace() { if (!token) { connectionOpen = false; $('#boot').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); return; } clearTimeout(retryTimer); if (reconnecting) { run++; pollAbort?.abort(); reconnecting = false; } connectionOpen = true; $('#boot').hidden = true; $('#login').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = false; refresh(true); loadProjects().catch(() => {}); }
+function showWorkspace() { if (!token) { connectionOpen = false; $('#boot').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = true; $('#login').hidden = false; state(storageBlocked ? '브라우저 저장소가 차단되어 로그인 상태를 유지할 수 없습니다.' : '로그인이 필요합니다.'); return; } clearTimeout(retryTimer); if (reconnecting) { run++; pollAbort?.abort(); reconnecting = false; } connectionOpen = true; $('#boot').hidden = true; $('#login').hidden = true; $('#reconnect').hidden = true; $('#workspace').hidden = false; refresh(true); loadProjects().catch(() => {}); loadSecrets().catch(() => {}); }
 function disconnect(message = '연결을 일시 중지했습니다.') {
   connectionOpen = false; run++; pollAbort?.abort(); reconnecting = false; clearTimeout(retryTimer); clearTimeout(renderTimer); renderTimer = 0; session = ''; readySession = ''; sessions = []; savedSessions=[]; seq = 0; available = false; composerBusy = false;
   $('#boot').hidden = true; $('#login').hidden = true; $('#workspace').hidden = true; $('#reconnect').hidden = false; $('#reconnect p').textContent = message; state(message, true); controls();
@@ -268,15 +338,14 @@ function forget(message = 'PC에서 이 기기의 로그인을 해제했습니�
 }
 
 term.open($('#raw-output'));
-// Keep the composer to its primary send/stop actions. Less frequent terminal
-// controls remain available in the collapsed options disclosure on every size.
-const advancedKeybar = document.querySelector('.keybar'), advancedKeys = advancedKeybar?.querySelector('div'), enterRow = document.querySelector('.enter-row'), enterButton = document.querySelector('[data-key=enter]');
-if (advancedKeybar && advancedKeys) {
-  advancedKeybar.style.display = 'block'; advancedKeybar.querySelector('summary').textContent = '입력 옵션';
-  // Do not nest the Enter control in a flex item: that collapses its hit area
-  // beside Ctrl C on a keyboard-height viewport.
-  advancedKeys.prepend($('#input-only'), enterButton); enterRow?.remove();
-  advancedKeys.querySelectorAll('button').forEach(button => { button.style.flex = '0 0 auto'; button.style.minHeight = '40px'; });
+// Composer ergonomics. The field grows with its text (also when the value is set from code, e.g. cleared after sending), and tapping
+// send or a key must not blur it: that would close the phone keyboard after every keystroke.
+{
+  const field = $('#input'), maxHeight = 132, descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+  const autosize = () => { field.style.height = 'auto'; field.style.height = Math.min(field.scrollHeight + 2, maxHeight) + 'px'; };
+  Object.defineProperty(field, 'value', { get() { return descriptor.get.call(this); }, set(next) { descriptor.set.call(this, next); autosize(); } });
+  field.addEventListener('input', autosize); window.addEventListener('resize', autosize); autosize();
+  $('.composer-wrap').addEventListener('mousedown', event => { if (event.target.closest('button')) event.preventDefault(); });
 }
 applyTheme(); setView(view); updateViewport();
 $('#send').onclick = () => compose(true); $('#input-only').onclick = () => compose(false); $('#stop').onclick = () => sendInput(session, specialKeys['ctrl-c']); $('#view-toggle').onclick = () => setView(view === 'readable' ? 'raw' : 'readable');
@@ -285,7 +354,11 @@ $('#input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey |
 document.querySelectorAll('[data-key]').forEach(button => { button.onclick = () => sendInput(session, specialKeys[button.dataset.key]); }); document.querySelectorAll('[data-create]').forEach(button => { button.onclick = () => { $('#new-session').open = false; createSession(button.dataset.create); closeMenu(); }; });
 $('#saved-sessions').ontoggle = () => { if($('#saved-sessions').open && token) loadSavedSessions().catch(failure=>state(failure.message,true)); };
 $('#saved-filter').oninput = renderSaved;
-$('#project-select').onchange = event => { project = event.target.value; savePreference('orbit.remote.project', project); renderSaved(); };
+$('#secrets').ontoggle = () => { if ($('#secrets').open && token) loadSecrets().catch(failure => state(failure.message, true)); };
+$('#secret-add').onclick = () => { showSecretForm(true); $('#secret-value').focus(); }; $('#secret-cancel').onclick = () => { showSecretForm(false); $('#secret-value').value = ''; $('#secret-name').value = ''; secretNamed = false; $('#secret-error').hidden = true; };
+$('#secret-name').oninput = () => { secretNamed = true; }; $('#secret-value').oninput = () => { if (!secretNamed) $('#secret-name').value = suggestSecretName($('#secret-value').value); }; $('#secret-names').replaceChildren(...commonSecretNames.map(name => new Option(name)));
+$('#secret-save').onclick = saveSecret; $('#secret-request-save').onclick = () => answerSecretRequest(true); $('#secret-request-deny').onclick = () => answerSecretRequest(false); $('#secret-value').onkeydown = $('#secret-name').onkeydown = event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); saveSecret(); } };
+$('#project-select').onchange = event => { project = event.target.value; savePreference('orbit.remote.project', project); renderSaved(); loadSecrets().catch(() => {}); };
 function closeMenu() { $('#menu-panel').hidden = true; }
 $('#menu-toggle').onclick = () => { $('#menu-panel').hidden = !$('#menu-panel').hidden; };
 $('#theme').onchange = event => { themeChoice = event.target.value; savePreference('orbit.remote.theme', themeChoice); applyTheme(); }; $('#readable-output').onscroll = () => { $('#latest').hidden = atOutputEnd(); };

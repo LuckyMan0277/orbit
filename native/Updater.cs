@@ -19,7 +19,8 @@ namespace Orbit {
   internal sealed class Release{public string Tag,Notes,Url,Sha256;public Version Version;}
   static Release pending;static readonly object gate=new object();
   public static Version Current(){return Assembly.GetExecutingAssembly().GetName().Version;}
-  public static string CurrentText(){var v=Current();return v.Major+"."+v.Minor+"."+Math.Max(v.Build,0);}
+  // A trailing "+" (assembly revision 1) marks a build made from commits or changes on top of that release; update checks ignore it.
+  public static string CurrentText(){var v=Current();return v.Major+"."+v.Minor+"."+Math.Max(v.Build,0)+(v.Revision>0?"+":"");}
   internal static Version ParseTag(string tag){if(String.IsNullOrEmpty(tag))return null;tag=tag.Trim();if(tag.StartsWith("v",StringComparison.OrdinalIgnoreCase))tag=tag.Substring(1);if(!Regex.IsMatch(tag,@"^\d+\.\d+\.\d+$"))return null;Version v;return Version.TryParse(tag,out v)?v:null;}
   internal static bool IsNewer(Version latest,Version current){if(latest==null||current==null)return false;return new Version(latest.Major,latest.Minor,Math.Max(latest.Build,0))>new Version(current.Major,current.Minor,Math.Max(current.Build,0));}
   static string S(Dictionary<string,object> d,string k){object v;return d!=null&&d.TryGetValue(k,out v)&&v!=null?Convert.ToString(v):"";}

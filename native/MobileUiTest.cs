@@ -15,10 +15,20 @@ namespace Orbit {
     // WebView2, but a deterministic terminal implementation so the interaction tests
     // do not launch shells or expose a test listener through a public tunnel.
     internal static class MobileUiTest {
-        sealed class Terminals : IRemoteTerminals {
+        sealed class Terminals : IRemoteTerminals, IRemoteSecrets {
             sealed class Session { internal string Id,Name,Profile;internal int Pid; }
             internal readonly List<string> Inputs=new List<string>();
             internal readonly List<string> Created=new List<string>();
+            internal readonly List<string> SecretCreates=new List<string>(),SetCalls=new List<string>();
+            internal string PendingId,PendingName,PendingReason,Answered;
+            internal void Ask(string id,string name,string reason) { lock(Secrets){PendingId=id;PendingName=name;PendingReason=reason;Answered=null;} }
+            public object PendingSecretRequests(string session) { lock(Secrets)return PendingId==null?new object[0]:new object[]{new {id=PendingId,name=PendingName,reason=PendingReason,project="C:\\orbit",projectName="orbit",terminal="orbit · PowerShell"}}; }
+            public bool AnswerSecretRequest(string request,string status) { lock(Secrets){if(request!=PendingId)return false;Answered=request+":"+status;PendingId=null;return true;} }
+            internal readonly Dictionary<string,string> Secrets=new Dictionary<string,string>(),Scopes=new Dictionary<string,string>();
+            public object SecretNames(string project) { lock(Secrets)return new {names=Secrets.Keys.OrderBy(x=>x).ToArray(),keys=Secrets.Keys.OrderBy(x=>x).Select(n=>new {name=n,scope=Scopes[n]}).ToArray()}; }
+            public object SetSecret(string name,string value,string scope,string project) { lock(Secrets){Secrets[name]=value;Scopes[name]=scope=="project"?"project":"global";SetCalls.Add(name+"|"+scope+"|"+project);}return SecretNames(project); }
+            public object DeleteSecret(string name,string scope,string project) { lock(Secrets){Secrets.Remove(name);Scopes.Remove(name);}return SecretNames(project); }
+            object IRemoteSecrets.Create(string profile,string resumeId,string project,string[] secrets) { lock(SecretCreates)SecretCreates.Add(profile+":"+(secrets==null?"*":String.Join(",",secrets)));return Create(profile,resumeId,project); }
             readonly List<Session> sessions=new List<Session> {new Session{Id="cmd",Name="CMD",Profile="cmd",Pid=101},new Session{Id="ps",Name="PowerShell",Profile="powershell",Pid=102}};
             bool dropped; long outputSeq=9; string pendingOutput="";
             public object Sessions() { lock(sessions)return new {sessions=sessions.Select(s=>new {id=s.Id,name=s.Name,profile=s.Profile,pid=s.Pid}).ToArray()}; }
@@ -101,6 +111,25 @@ namespace Orbit {
                     if(terminals.Created.Count!=5||new[]{"cmd","powershell","codex","claude","codex/resume"}.Any(profile=>!terminals.Created.Contains(profile))) throw new InvalidOperationException("mobile create controls or saved resume did not select every supported profile");
                     if(terminals.CountExact("SLOW")!=1||terminals.CountExact("CONFIRMED DROP")!=1||terminals.CountExact("\r")<3) throw new InvalidOperationException("mobile controls did not reach expected body and Enter packets");
                     if(terminals.CountExact("DROP")!=1||terminals.CountExact("DROP\r")!=0) throw new InvalidOperationException("dropped response body was repeated or its Enter packet was emitted");
+                    await Stage(window,SecretsScript);
+                    string secretValue;lock(terminals.Secrets)terminals.Secrets.TryGetValue("OPENAI_API_KEY",out secretValue);
+                    if(secretValue!="sk-mobile-secret-789") throw new InvalidOperationException("mobile secret was not stored on the host");
+                    lock(terminals.Secrets)if(!terminals.SetCalls.Contains("OPENAI_API_KEY|project|C:\\orbit")) throw new InvalidOperationException("a key saved from the phone must default to the selected project: "+String.Join(";",terminals.SetCalls));
+                    if(terminals.SecretCreates.Count!=6||terminals.SecretCreates.Any(x=>!x.EndsWith(":*"))) throw new InvalidOperationException("the phone must not choose keys per session; the host decides: "+String.Join(";",terminals.SecretCreates));
+                    if(terminals.Created.Count!=6) throw new InvalidOperationException("secret-carrying create did not go through the normal create path");
+                    // an AI in the session asks for another key: the page shows a prompt, the value goes to the PC and never through the terminal
+                    terminals.Ask("req-1","STRIPE_KEY","need it to test payments");terminals.EmitOutput("\r\nwaiting for the user\r\n");
+                    await Stage(window,AskShowScript);
+                    await window.CaptureMobileViewportForTest(TestArtifacts.PathFor("mobile-secret-request-tablet.png"));
+                    await Stage(window,AskSaveScript);
+                    string requested;lock(terminals.Secrets)terminals.Secrets.TryGetValue("STRIPE_KEY",out requested);
+                    if(requested!="sk-stripe-request-1"||terminals.Answered!="req-1:saved") throw new InvalidOperationException("prompted secret was not stored and answered: "+requested+" / "+terminals.Answered);
+                    lock(terminals.Secrets)if(!terminals.SetCalls.Contains("STRIPE_KEY|project|C:\\orbit")) throw new InvalidOperationException("a requested key must be saved for the project of the terminal that asked: "+String.Join(";",terminals.SetCalls));
+                    if(terminals.Count("sk-stripe-request-1")!=0) throw new InvalidOperationException("prompted secret value reached a terminal");
+                    await window.ExecuteForTest("document.querySelector('#menu-toggle').click();document.querySelector('#secrets').open=true;'secrets menu'");
+                    await Task.Delay(150);
+                    await window.CaptureMobileViewportForTest(TestArtifacts.PathFor("mobile-secrets-tablet.png"));
+                    await window.ExecuteForTest("document.querySelector('#menu-panel').hidden=true;'menu closed'");
                     string replacementToken=server.IssueAccountToken("replacement-token-test");
                     if(String.IsNullOrEmpty(replacementToken)) throw new InvalidOperationException("mobile test replacement token setup failed");
                     await window.ExecuteForTest("localStorage.setItem('orbit.remote.token','revoked-token');'replacement token set'");
@@ -129,6 +158,54 @@ check(document.querySelector('#readable-output').textContent.includes('\uD55C\uA
 const expectedCjk='\uD55C\uAD6D\uC5B4 \uAE34 \uCD9C\uB825 '+String.fromCharCode(0xAC00).repeat(260)+' https://example.test/very/long/path/without/a/natural/break';
 document.querySelector('#view-toggle').click();await pause(60);check(!document.querySelector('#raw-output').hidden&&document.querySelector('#readable-output').hidden,'raw toggle did not switch rendered view');
 document.querySelector('#view-toggle').click();await pause(60);check(!document.querySelector('#readable-output').hidden,'readable toggle did not restore');
+";
+        // API keys: pasted into a password field (not the composer), stored write-only on the host for the selected project or for all projects.
+        const string SecretsScript=@"
+const tabs=()=>Array.from(document.querySelectorAll('.session-tab'));const drawer=document.querySelector('#secrets');
+check(drawer&&document.querySelector('#secret-value')&&document.querySelector('#secret-value').type==='password','API key drawer or its password field is missing');
+drawer.open=true;drawer.dispatchEvent(new Event('toggle'));
+for(let i=0;i<80&&document.querySelector('#secret-form').hidden;i++)await pause(50);
+const value=document.querySelector('#secret-value'),name=document.querySelector('#secret-name'),scope=document.querySelector('#secret-scope');
+check(!document.querySelector('#secret-form').hidden&&document.querySelector('#secret-add').hidden,'with no keys the paste form must be open right away');
+check(document.querySelector('#secret-summary').textContent==='저장된 키 없음','the summary should say nothing is stored');
+check(!scope.hidden&&scope.value==='project'&&scope.options[0].text.includes('orbit'),'the scope must default to the selected project');
+value.value='sk-mobile-secret-789';value.dispatchEvent(new Event('input'));
+check(name.value==='OPENAI_API_KEY','pasting a key did not suggest its name');
+document.querySelector('#secret-save').click();
+for(let i=0;i<80&&!document.querySelector('#secret-list [data-secret=OPENAI_API_KEY]');i++)await pause(50);
+const row=document.querySelector('#secret-list [data-secret=OPENAI_API_KEY]');check(row&&row.textContent.includes('이 프로젝트'),'the saved key is not listed with its scope');
+check(value.value===''&&name.value==='','the form was not cleared after saving');
+check(document.querySelector('#secret-summary').textContent==='1개 저장됨','the summary does not count the key');
+check(!document.documentElement.outerHTML.includes('sk-mobile-secret-789'),'the key value is present in the page after saving');
+check(!document.querySelector('#secret-add').hidden&&document.querySelector('#secret-form').hidden,'after saving, the list shows with an add button');
+// a key for all projects, and deleting asks twice
+document.querySelector('#secret-add').click();value.value='temp-value';value.dispatchEvent(new Event('input'));name.value='TEMP_KEY';name.dispatchEvent(new Event('input'));scope.value='global';document.querySelector('#secret-save').click();
+for(let i=0;i<80&&!document.querySelector('#secret-list [data-secret=TEMP_KEY]');i++)await pause(50);
+const temp=document.querySelector('#secret-list [data-secret=TEMP_KEY]');check(temp&&temp.textContent.includes('모든 프로젝트'),'the all-projects key is not listed');
+const del=temp.querySelector('.secret-delete');del.click();check(del.textContent==='한 번 더'&&document.querySelector('#secret-list [data-secret=TEMP_KEY]'),'the first tap must only ask for confirmation');
+del.click();for(let i=0;i<80&&document.querySelector('#secret-list [data-secret=TEMP_KEY]');i++)await pause(50);
+check(!document.querySelector('#secret-list [data-secret=TEMP_KEY]')&&document.querySelector('#secret-list [data-secret=OPENAI_API_KEY]'),'the second tap should delete only that key');
+const target=tabs().length+1;document.querySelector('[data-create=powershell]').click();for(let i=0;i<80&&tabs().length!==target;i++)await pause(50);check(tabs().length===target,'a session was not created with keys stored');
+";
+        const string AskShowScript=@"
+const box=document.querySelector('#secret-request');
+for(let i=0;i<100&&box.hidden;i++)await pause(50);
+check(!box.hidden,'the AI request prompt did not appear');
+const reason=document.querySelector('#secret-request-reason').textContent;
+check(document.querySelector('#secret-request-title').textContent==='STRIPE_KEY'&&reason.includes('need it to test payments'),'the prompt does not show the key name and reason');
+check(reason.includes('orbit')&&reason.includes('PowerShell'),'the prompt does not say which project and terminal asked: '+reason);
+const scope=document.querySelector('#secret-request-scope');check(!scope.hidden&&scope.value==='project'&&scope.options[0].text.includes('orbit'),'the scope must default to the project that asked');
+check(document.querySelector('#secret-request-value').type==='password','the prompt value field is not a password field');
+";
+        const string AskSaveScript=@"
+const box=document.querySelector('#secret-request'),input=document.querySelector('#secret-request-value');
+document.querySelector('#secret-request-save').click();await pause(120);check(!box.hidden&&!document.querySelector('#secret-request-error').hidden,'an empty value was accepted');
+input.value='sk-stripe-request-1';document.querySelector('#secret-request-save').click();
+for(let i=0;i<100&&!box.hidden;i++)await pause(50);
+check(box.hidden,'the prompt stayed open after saving');check(input.value==='','the prompt value was not cleared');
+await pause(300);check(box.hidden,'the answered prompt came back');
+for(let i=0;i<80&&!document.querySelector('#secret-list [data-secret=STRIPE_KEY]');i++)await pause(50);
+check(document.querySelector('#secret-list [data-secret=STRIPE_KEY]'),'the requested key is missing from the list');
 ";
         const string InteractionScript=@"
 const tabs=()=>Array.from(document.querySelectorAll('.session-tab'));const input=document.querySelector('#input'),picker=document.querySelector('#session-select');const switchTo=async id=>{picker.value=id;picker.dispatchEvent(new Event('change',{bubbles:true}));for(let i=0;i<80&&document.querySelector('#send').disabled;i++)await pause(50);check(picker.value===id&&!document.querySelector('#send').disabled,'session did not become ready '+id);};

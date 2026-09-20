@@ -90,6 +90,8 @@ namespace Orbit {
                 await window.CaptureForTest(TestArtifacts.PathFor("sidebar-explorer-light.png"));
                 await window.ExecuteForTest("document.documentElement.dataset.theme='dark';'dark'");
                 await AccountUiTest.Run(window);
+                await SessionsUiTest.Run(window);
+                await SecretsUiTest.Run(window);
                 await Task.Run(()=>RemoteUiTest.Run());
                 await MobileUiTest.Run(window);
                 var normalSize=window.Size;

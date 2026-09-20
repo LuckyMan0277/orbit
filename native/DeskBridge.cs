@@ -31,7 +31,8 @@ namespace Orbit {
         // remote-connection settings of this PC are not reachable from a remote client.
         static readonly HashSet<string> DeskAllowed=new HashSet<string> {
             "list","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","ack","resize",
-            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal" };
+            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal",
+            "secretList","secretSet","secretDelete","secretAnswer" };
         readonly ConcurrentDictionary<string,DeskClient> deskClients=new ConcurrentDictionary<string,DeskClient>();
         readonly ConcurrentDictionary<string,string> sessionOwners=new ConcurrentDictionary<string,string>();
         // Remote clients watching a terminal that the host itself opened (session id -> client ids).
@@ -137,7 +138,8 @@ namespace Orbit {
         // ---------------------------------------------------------------- client side
         static readonly HashSet<string> DeskForward=new HashSet<string> {
             "list","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","resize",
-            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal" };
+            "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal",
+            "secretList","secretSet","secretDelete","secretAnswer" };
         // Terminal input must reach the host in the order it was typed; file calls may overlap.
         static readonly HashSet<string> DeskOrdered=new HashSet<string> { "createTerminal","write","resize","closeTerminal","terminalName" };
         readonly object deskLaneLock=new object();

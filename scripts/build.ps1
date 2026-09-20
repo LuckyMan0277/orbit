@@ -40,10 +40,31 @@ New-Item -ItemType Directory -Force -Path 'release\Orbit\web' | Out-Null
 Copy-Item -Path 'dist\*' -Destination 'release\Orbit\web' -Recurse -Force
 Copy-Item -LiteralPath "$sdk\lib\net462\Microsoft.Web.WebView2.Core.dll","$sdk\lib\net462\Microsoft.Web.WebView2.WinForms.dll","$sdk\runtimes\win-x64\native\WebView2Loader.dll" -Destination 'release\Orbit' -Force
 $sources = Get-ChildItem -LiteralPath native -Filter '*.cs' | ForEach-Object FullName
+# Version. A release build (CI sets APP_VERSION from the tag) uses exactly that. A local build reports the latest release tag it is based on; with
+# commits or changes on top of the tag it gets revision 1, shown as "0.2.15+". Without git or tags, native\AssemblyInfo.cs is used as it is.
+$version = $null; $describe = 'APP_VERSION'
+if ($env:APP_VERSION -match '^\d+\.\d+\.\d+$') { $version = "$($env:APP_VERSION).0" }
+else {
+    try { $describe = (& git describe --tags --long --dirty --match 'v*.*.*' 2>$null) } catch { $describe = $null }
+    if ($LASTEXITCODE -eq 0 -and $describe -match '^v(\d+)\.(\d+)\.(\d+)-(\d+)-g[0-9a-f]+(-dirty)?$') {
+        $ahead = if ([int]$Matches[4] -gt 0 -or $Matches[5]) { 1 } else { 0 }
+        $version = "$($Matches[1]).$($Matches[2]).$($Matches[3]).$ahead"
+    }
+}
+if ($version) {
+    $stamp = Join-Path $env:TEMP 'OrbitAssemblyInfo.generated.cs'
+    Set-Content -LiteralPath $stamp -Encoding ASCII -Value @('using System.Reflection;', '[assembly: AssemblyTitle("Orbit")]', '[assembly: AssemblyProduct("Orbit Agent Workspace")]', "[assembly: AssemblyVersion(`"$version`")]", "[assembly: AssemblyFileVersion(`"$version`")]")
+    $sources = @($sources | Where-Object { (Split-Path -Leaf $_) -ne 'AssemblyInfo.cs' }) + $stamp
+    Write-Host "버전: $version ($describe)"
+}
 $compilerArgs = @('/nologo','/target:winexe','/platform:x64','/optimize+', '/win32icon:assets\orbit.ico','/resource:assets\orbit.ico,Orbit.Icon','/out:release\Orbit\Orbit.exe','/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll','/reference:System.Security.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',"/reference:$sdk\lib\net462\Microsoft.Web.WebView2.Core.dll","/reference:$sdk\lib\net462\Microsoft.Web.WebView2.WinForms.dll") + $sources
 & $csc @compilerArgs
 if ($LASTEXITCODE -ne 0) { throw '네이티브 빌드 실패' }
 Copy-Item -LiteralPath 'native\Orbit.exe.config' -Destination 'release\Orbit' -Force
+# orbit-secret: the command an AI runs inside an Orbit terminal to use stored API keys (put on that terminal's PATH).
+New-Item -ItemType Directory -Force -Path 'release\Orbit\bin' | Out-Null
+& $csc /nologo /target:exe /optimize+ '/out:release\Orbit\bin\orbit-secret.exe' /reference:System.dll /reference:System.Core.dll /reference:System.Web.Extensions.dll 'native\cli\OrbitSecret.cs'
+if ($LASTEXITCODE -ne 0) { throw 'orbit-secret 빌드 실패' }
 New-Item -ItemType Directory -Force -Path 'release\Orbit\licenses' | Out-Null
 New-Item -ItemType Directory -Force -Path 'release\Orbit\tools' | Out-Null
 Copy-Item -LiteralPath $cloudflared -Destination 'release\Orbit\tools\cloudflared.exe' -Force

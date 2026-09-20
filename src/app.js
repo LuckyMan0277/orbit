@@ -1,9 +1,11 @@
 import './styles.css';
 import { $, el, button, icon, iconButton, toast, guard, dialog, confirm } from './ui.js';
 import { call, notify, on, isDesktop } from './bridge.js';
+import { commonSecretNames, secretNameProblem, suggestSecretName } from './secret-hints.js';
+import { sessionStatus, groupByProject, sessionName, sessionLabel } from './session-status.js';
 import { parseLocation } from './links.js';
 
-const state = { folder: '', terminals: [], terminalCreating: 0, active: null, terminalRoot: { type: 'group', id: 'group-root', tabs: [], active: null }, activeGroup: 'group-root', files: [], file: null, editor: null, editorModule: null, markdownEpoch: 0, hidden: false, savedSessions: [], savedAll: false, savedEpoch: 0, settings: { lowPower: true, fontSize: 13, defaultShell: 'powershell', theme: 'dark', recent: [], sidebarMode: 'saved' }, loadingFile: false };
+const state = { folder: '', terminals: [], terminalCreating: 0, active: null, terminalRoot: { type: 'group', id: 'group-root', tabs: [], active: null }, activeGroup: 'group-root', files: [], file: null, editor: null, editorModule: null, markdownEpoch: 0, hidden: false, savedSessions: [], savedAll: false, savedEpoch: 0, settings: { lowPower: true, fontSize: 13, defaultShell: 'powershell', theme: 'dark', recent: [], sidebarMode: 'sessions' }, loadingFile: false, panelsStale: true, focusedTerminal: '' };
 const profiles = { codex: { name: 'Codex', subtitle: 'OpenAI CLI', mark: '✳', class: 'codex' }, claude: { name: 'Claude', subtitle: 'Anthropic CLI', mark: '✺', class: 'claude' }, powershell: { name: 'PowerShell', subtitle: '기본 터미널', mark: '>_', class: 'shell' }, cmd: { name: 'CMD', subtitle: '명령 프롬프트', mark: '>_', class: 'shell' } };
 const basename = path => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 const projectKey = path => String(path || '').toLowerCase();
@@ -11,23 +13,23 @@ const projectName = path => state.client ? (state.client.names[path] || basename
 const app = $('#app');
 app.innerHTML = `
   <section class="home-screen" id="home-screen" aria-label="Orbit 홈">
-    <header class="home-header"><div class="home-brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><span>orbit</span></div><div class="home-header-actions"><button class="external-connection update-available" data-update hidden></button><button id="home-pick-folder" class="home-open-folder">프로젝트 추가</button><button id="home-client-refresh" class="home-open-folder client-only">새로 고침</button><button id="home-client-logout" class="home-open-folder client-only">로그아웃</button><div class="window-controls home-window-controls" aria-label="창 제어"><button id="home-window-minimize" title="최소화" aria-label="최소화"></button><button id="home-window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="home-window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
+    <header class="home-header"><div class="home-brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><span>orbit</span></div><div class="home-header-actions"><button class="external-connection update-available" data-update hidden></button><button class="secrets-open" title="API 키 보관함" aria-label="API 키 보관함"><span class="secrets-icon"></span><span class="secrets-count" hidden></span></button><button id="home-pick-folder" class="home-open-folder">프로젝트 추가</button><button id="home-client-refresh" class="home-open-folder client-only">새로 고침</button><button id="home-client-logout" class="home-open-folder client-only">로그아웃</button><div class="window-controls home-window-controls" aria-label="창 제어"><button id="home-window-minimize" title="최소화" aria-label="최소화"></button><button id="home-window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="home-window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
     <main class="home-stage"><section class="home-orbit-system" id="home-orbit" aria-label="최근 프로젝트"></section><div class="home-recent-note"><small>프로젝트 점을 선택해 작업 공간을 엽니다.</small></div></main>
   </section>
   <aside class="sidebar">
-    <div class="brand"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><div>orbit<span class="brand-caption">AGENT WORKSPACE</span></div><span class="version" id="app-version"></span></div>
-    <button class="workspace-picker" id="pick-folder"><span class="folder-symbol"></span><span class="workspace-name"><small>WORKSPACE</small><strong id="folder-name">불러오는 중…</strong></span><span class="picker-arrow" id="picker-arrow"></span></button>
+    <button class="brand brand-home" id="home-return" title="프로젝트 화면 열기" aria-label="프로젝트 화면 열기"><img class="orbit-wordmark-mark" src="./orbit.svg" alt=""><div>orbit<span class="brand-caption">AGENT WORKSPACE</span></div><span class="version" id="app-version"></span></button>
+    <button class="new-session-button" id="new-session" title="새 세션 (Ctrl+Shift+N)"><span class="ns-icon"></span><span>새 세션</span><kbd>Ctrl Shift N</kbd></button>
     <div class="side-heading"><span>탐색기</span><div id="tree-actions"></div></div>
     <div class="file-filter"><span id="filter-icon"></span><input id="file-filter" placeholder="표시된 파일 필터…" aria-label="표시된 파일 필터"></div>
     <div id="file-tree" class="file-tree" aria-label="파일 탐색기"></div>
     <div class="sidebar-bottom"><div class="side-heading"><span>빠른 도구</span><span class="tiny">WORKFLOW</span></div><div id="quick-tools"></div><div class="resource-card" id="resource-card"><span id="resource-leaf"></span><div><strong id="power-label">가볍게 실행 중</strong><small id="power-detail">절약 모드 · 스크롤 기록 500줄</small></div><span class="status-dot"></span></div><button id="preferences" class="settings-button"><span id="settings-icon"></span>설정 및 사용량<span>⌘</span></button></div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="breadcrumb"><button id="home-return" class="home-return" title="Home" aria-label="Return to Home">orbit</button><button id="sidebar-toggle" class="icon-button" title="사이드바 토글 (Ctrl+B)" aria-label="사이드바 토글"></button><span id="breadcrumb-folder">workspace</span><span class="slash">/</span><span>작업 공간</span><span class="terminal-mini">터미널 <span id="session-count">0</span></span></div><div class="topbar-right"><button class="external-connection update-available" data-update hidden></button><button id="external-connection" class="external-connection" aria-label="기기 연결" title="기기 연결 · 계정 로그인"><span id="external-icon"></span><span>외부 연결</span><small id="external-state">꺼짐</small></button><div class="toolbar-actions" id="workspace-actions"></div><button class="command-trigger" id="command-button">명령 찾기 <kbd>Ctrl K</kbd></button><div class="window-controls" aria-label="창 제어"><button id="window-minimize" title="최소화" aria-label="최소화"></button><button id="window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
+    <header class="topbar"><div class="breadcrumb"><button id="sidebar-toggle" class="icon-button" title="사이드바 토글 (Ctrl+B)" aria-label="사이드바 토글"></button><span id="breadcrumb-folder">workspace</span></div><div class="topbar-right"><button class="external-connection update-available" data-update hidden></button><button class="secrets-open" title="API 키 보관함" aria-label="API 키 보관함"><span class="secrets-icon"></span><span class="secrets-count" hidden></span></button><button id="external-connection" class="external-connection" data-state="off" aria-label="기기 연결" title="기기 연결 · 꺼짐"><span id="external-icon"></span><small id="external-state">꺼짐</small></button><div class="toolbar-actions" id="workspace-actions"></div><button class="command-trigger" id="command-button" title="명령 찾기 (Ctrl+K)" aria-label="명령 찾기"><span id="command-icon"></span></button><div class="window-controls" aria-label="창 제어"><button id="window-minimize" title="최소화" aria-label="최소화"></button><button id="window-maximize" title="최대화 또는 복원" aria-label="최대화 또는 복원"></button><button id="window-close" class="window-close" title="닫기" aria-label="닫기"></button></div></div></header>
     <div class="work-area" id="work-area">
       <section class="terminal-section" id="terminal-section">
         <div id="welcome" class="welcome">
-          <div class="welcome-copy workspace-welcome-copy"><span class="welcome-kicker">WORKSPACE READY</span><h1>작업을<br><span>시작하세요.</span></h1><p>사이드바에서 파일과 저장된 대화를 확인하거나, 아래에서 새 터미널을 시작하세요.</p></div>
+          <div class="welcome-copy workspace-welcome-copy"><span class="welcome-kicker">WORKSPACE READY</span><h1>작업을<br><span>시작하세요.</span></h1><p>프로젝트를 골라 Claude나 Codex를 시작하세요. 여러 프로젝트의 세션을 켜 두고 오가며 작업할 수 있어요.</p></div>
           <section class="workspace-launch-section" aria-label="새 작업 시작"><div class="workspace-launch-heading"><span>새 작업 시작</span><small>원하는 에이전트를 엽니다</small></div><div class="launcher-grid" id="launchers"></div></section>
           <div class="welcome-foot"><span><i class="status-dot"></i> 준비됐어요. 새 터미널을 시작하거나 작업을 이어가세요.</span><span>새 터미널 <kbd>Ctrl Shift T</kbd></span></div>
         </div><div id="terminal-layout" class="terminal-layout"></div></section>
@@ -39,38 +41,39 @@ app.innerHTML = `
 
 app.classList.add('home-active');
 
-$('.folder-symbol').append(icon('folder')); $('#filter-icon').append(icon('search')); $('#resource-leaf').append(icon('leaf')); $('#settings-icon').append(icon('settings'));
-$('#picker-arrow').append(icon('chevronDown'));
+$('#new-session .ns-icon').append(icon('plus')); $('#filter-icon').append(icon('search')); $('#resource-leaf').append(icon('leaf')); $('#settings-icon').append(icon('settings'));
 $('#sidebar-toggle').append(icon('menu'));
 for (const [id, name] of [['home-window-minimize','minimize'],['home-window-maximize','maximize'],['home-window-close','close'],['window-minimize','minimize'],['window-maximize','maximize'],['window-close','close']]) $('#'+id).append(icon(name));
 const savedHeading = el('div','side-heading'); savedHeading.append(el('span','','저장된 대화'));
 const savedRefresh = iconButton('refresh','저장된 대화 새로고침',guard(refreshSavedSessions));
 savedHeading.append(savedRefresh);
-const savedNewRow=el('div','saved-new-row');savedNewRow.append(button('새 Codex','sidebar-new codex-new',guard(()=>newTerminal('codex')),'새 Codex 세션'),button('새 Claude','sidebar-new claude-new',guard(()=>newTerminal('claude')),'새 Claude 세션'));
+const savedNewRow=el('div','saved-new-row');savedNewRow.append(button('새 Codex','sidebar-new codex-new',guard(()=>newSessionDialog({profile:'codex'})),'새 Codex 세션'),button('새 Claude','sidebar-new claude-new',guard(()=>newSessionDialog({profile:'claude'})),'새 Claude 세션'));
 const savedSearch = el('input'); savedSearch.placeholder='대화 검색'; savedSearch.setAttribute('aria-label','저장된 대화 검색'); savedSearch.oninput=renderSavedSessions;
 const savedFilter = el('div','file-filter'); savedFilter.append(icon('search'),savedSearch);
 const savedList = el('div','saved-sessions'); savedList.id='saved-sessions';
 const fileFilter=$('#file-filter').parentElement, fileTree=$('#file-tree'), treeHeading=$('#tree-actions').parentElement;
 const sidebar=$('.sidebar'), sidebarBottom=$('.sidebar-bottom');
 const sidebarTabs=el('div','sidebar-mode-tabs'); sidebarTabs.id='sidebar-mode-tabs'; sidebarTabs.setAttribute('role','tablist'); sidebarTabs.setAttribute('aria-label','사이드바 보기');
-const savedTab=button('저장된 대화','sidebar-mode-tab active',()=>setSidebarMode('saved')); savedTab.id='sidebar-saved-tab'; savedTab.setAttribute('role','tab'); savedTab.setAttribute('aria-controls','saved-conversations-panel');
-const explorerTab=button('파일 탐색기','sidebar-mode-tab',()=>setSidebarMode('explorer')); explorerTab.id='sidebar-explorer-tab'; explorerTab.setAttribute('role','tab'); explorerTab.setAttribute('aria-controls','explorer-panel');
-sidebarTabs.append(savedTab,explorerTab);
+const sidebarTabButtons={};
+for(const [mode,label,panelId] of [['sessions','세션','session-list-panel'],['saved','저장된 대화','saved-conversations-panel'],['explorer','파일','explorer-panel']]){const tab=button(label,'sidebar-mode-tab',()=>setSidebarMode(mode));tab.id=`sidebar-${mode}-tab`;tab.setAttribute('role','tab');tab.setAttribute('aria-controls',panelId);sidebarTabButtons[mode]=tab;sidebarTabs.append(tab);}
 const sidebarPanels=el('div','sidebar-panels');
-const savedPanel=el('section','sidebar-panel saved-panel'); savedPanel.id='saved-conversations-panel'; savedPanel.setAttribute('role','tabpanel'); savedPanel.setAttribute('aria-labelledby',savedTab.id); savedPanel.append(savedHeading,savedNewRow,savedFilter,savedList);
-const explorerPanel=el('section','sidebar-panel explorer-panel'); explorerPanel.id='explorer-panel'; explorerPanel.setAttribute('role','tabpanel'); explorerPanel.setAttribute('aria-labelledby',explorerTab.id); explorerPanel.append(treeHeading,fileFilter,fileTree);
-sidebarPanels.append(savedPanel,explorerPanel); sidebar.insertBefore(sidebarTabs,sidebarBottom); sidebar.insertBefore(sidebarPanels,sidebarBottom);
+const sessionsPanel=el('section','sidebar-panel sessions-panel'); sessionsPanel.id='session-list-panel'; sessionsPanel.setAttribute('role','tabpanel'); sessionsPanel.setAttribute('aria-labelledby',sidebarTabButtons.sessions.id);
+const sessionList=el('div','session-list'); sessionList.id='session-list';
+const addFolder=button('폴더 추가…','session-add-folder',guard(pickFolderForSession),'프로젝트 폴더를 골라 세션 시작'); addFolder.id='pick-folder';
+sessionsPanel.append(sessionList,addFolder);
+const savedPanel=el('section','sidebar-panel saved-panel'); savedPanel.id='saved-conversations-panel'; savedPanel.setAttribute('role','tabpanel'); savedPanel.setAttribute('aria-labelledby',sidebarTabButtons.saved.id); savedPanel.append(savedHeading,savedNewRow,savedFilter,savedList);
+const explorerPanel=el('section','sidebar-panel explorer-panel'); explorerPanel.id='explorer-panel'; explorerPanel.setAttribute('role','tabpanel'); explorerPanel.setAttribute('aria-labelledby',sidebarTabButtons.explorer.id); explorerPanel.append(treeHeading,fileFilter,fileTree);
+const sidebarPanelsByMode={sessions:sessionsPanel,saved:savedPanel,explorer:explorerPanel};
+sidebarPanels.append(sessionsPanel,savedPanel,explorerPanel); sidebar.insertBefore(sidebarTabs,sidebarBottom); sidebar.insertBefore(sidebarPanels,sidebarBottom);
 function setSidebarMode(mode, save=true) {
-  const explorer=mode==='explorer';
-  savedTab.classList.toggle('active',!explorer); explorerTab.classList.toggle('active',explorer);
-  savedTab.setAttribute('aria-selected',String(!explorer)); explorerTab.setAttribute('aria-selected',String(explorer));
-  savedTab.tabIndex=explorer?-1:0; explorerTab.tabIndex=explorer?0:-1;
-  savedPanel.hidden=explorer; explorerPanel.hidden=!explorer;
-  state.settings.sidebarMode=explorer?'explorer':'saved';
+  if(!sidebarPanelsByMode[mode])mode='sessions';
+  for(const [name,tab] of Object.entries(sidebarTabButtons)){const on=name===mode;tab.classList.toggle('active',on);tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;sidebarPanelsByMode[name].hidden=!on;}
+  state.settings.sidebarMode=mode;
   if(save) persist();
+  refreshProjectPanels();
 }
 sidebarTabs.onkeydown=event=>{
-  const tabs=[savedTab,explorerTab];
+  const tabs=Object.values(sidebarTabButtons),modes=Object.keys(sidebarTabButtons);
   const current=tabs.indexOf(document.activeElement);
   if(current<0)return;
   let next=null;
@@ -78,10 +81,10 @@ sidebarTabs.onkeydown=event=>{
   if(event.key==='ArrowRight')next=(current+1)%tabs.length;
   if(event.key==='Home')next=0;
   if(event.key==='End')next=tabs.length-1;
-  if(next!==null){event.preventDefault();tabs[next].focus();setSidebarMode(next?'explorer':'saved');}
+  if(next!==null){event.preventDefault();tabs[next].focus();setSidebarMode(modes[next]);}
 };
-setSidebarMode('saved',false);
-$('#pick-folder').onclick = guard(pickFolder);
+setSidebarMode('sessions',false);
+$('#new-session').onclick = guard(async () => newSessionDialog());
 $('#home-pick-folder').onclick = guard(pickHomeProject);
 $('#home-client-refresh').onclick = guard(refreshClientProjects);
 $('#home-client-logout').onclick = guard(leaveClientMode);
@@ -90,21 +93,19 @@ $('#home-window-maximize').onclick = () => notify('windowMaximize');
 $('#home-window-close').onclick = () => notify('windowClose');
 $('#home-return').onclick = showHome;
 $('#sidebar-toggle').onclick = () => app.classList.toggle('sidebar-hidden');
-$('#preferences').onclick = guard(preferences);
-$('#external-icon').append(icon('devices'));$('#external-connection').onclick=guard(remoteDevices);
-$('#command-button').onclick = commands;
+$('#preferences').onclick = guard(preferences); document.querySelectorAll('.secrets-icon').forEach(node => node.append(icon('key'))); if (isDesktop) refreshSecretCount(); document.querySelectorAll('.secrets-open').forEach(button => { button.onclick = guard(async () => secretsDialog()); });
+$('#external-icon').append(icon('devices'));
+new MutationObserver(() => { const button = $('#external-connection'), text = $('#external-state').textContent; button.dataset.state = text === '꺼짐' ? 'off' : text === '연결 확인' ? 'error' : 'on'; if (button.dataset.state !== 'error') button.title = `기기 연결 · ${text}`; }).observe($('#external-state'), { childList: true, characterData: true, subtree: true });$('#external-connection').onclick=guard(remoteDevices);
+$('#command-icon').append(icon('command')); $('#command-button').onclick = commands;
 $('#window-minimize').onclick = () => notify('windowMinimize');
 $('#window-maximize').onclick = () => notify('windowMaximize');
 $('#window-close').onclick = () => notify('windowClose');
 $('#tree-actions').append(iconButton('refresh', '파일 목록 새로고침', guard(refreshTree)), iconButton('plus', '새 파일', guard(newFile)));
-$('#workspace-actions').append(
-  iconButton('search', '터미널 검색 (Ctrl+Shift+F)', terminalSearch),
-  iconButton('clipboard', '클립보드를 터미널에 붙여넣기 (Ctrl+V)', guard(pasteClipboardToActive)),
-  iconButton('split', '터미널 분할 보기 (Ctrl+Shift+D)', guard(toggleSplit))
-);
+// Only split view stays in the bar; terminal search and pasting are in the command palette (and keep their shortcuts).
+$('#workspace-actions').append(iconButton('split', '터미널 분할 보기 (Ctrl+Shift+D)', guard(toggleSplit)));
 {const preview=button('미리보기','editor-mode',()=>setMarkdownMode('preview')),edit=button('편집','editor-mode',()=>setMarkdownMode('edit'));preview.dataset.editorMode='preview';edit.dataset.editorMode='edit';$('#editor-actions').append(preview,edit,iconButton('terminal', '파일 경로를 터미널에 붙여넣기', guard(() => pasteActive(`"${state.file.path}"`))), iconButton('refresh', '디스크에서 다시 열기', guard(reloadFile)), button('저장', 'save-button', guard(saveFile)));}
 for (const profile of ['codex','claude','powershell']) {
-  const p = profiles[profile]; const card = button('', `launcher ${p.class}`, guard(() => newTerminal(profile))); card.dataset.profile = profile;
+  const p = profiles[profile]; const card = button('', `launcher ${p.class}`, guard(() => newSessionDialog({ profile }))); card.dataset.profile = profile;
   card.append(el('span', 'launcher-mark', p.mark)); const copy = el('div'); copy.append(el('strong', '', p.name), el('small', '', p.subtitle)); card.append(copy, icon('arrow')); $('#launchers').append(card);
 }
 for (const [name, label, action, shortcut] of [['file','파일 열기',openFilePicker,'Ctrl O'],['bookmark','프롬프트 보관함',promptLibrary,''],['folder','최근 작업 폴더',recentFolders,'']]) {
@@ -112,14 +113,13 @@ for (const [name, label, action, shortcut] of [['file','파일 열기',openFileP
 }
 $('#file-filter').addEventListener('input', () => { const query = $('#file-filter').value.toLowerCase(); for (const item of $('#file-tree').querySelectorAll('.tree-file')) item.hidden = !item.dataset.name.includes(query); });
 on('error', data => toast(data.message, true));
-on('remoteCreate', async data => { try { if (!['codex','claude','powershell','cmd'].includes(data.profile)) throw new Error('지원하지 않는 터미널입니다.'); let resume=null;if(data.resumeId){if(!data.cwd||!data.title)throw new Error('저장된 대화 정보가 올바르지 않습니다.');const listed=await call('savedSessions',{cwd:state.folder,allWorkspaces:true}),items=Array.isArray(listed.sessions)?listed.sessions:[];resume=items.find(x=>x.provider===data.profile&&x.id===data.resumeId&&x.cwd===data.cwd);if(!resume)throw new Error('저장된 대화 정보를 다시 확인할 수 없습니다.');if(!matchesProject(resume.cwd,state.folder))await setFolder(resume.cwd);const open=state.terminals.find(t=>t.profile===resume.provider&&t.resumeId===resume.id&&!t.pane.exited);if(open){activateTerminal(open.id);open.pane.focus();notify('remoteCreate',{request:data.request,session:open.id});return;}} else if(data.project){if(!visibleProjects().some(path=>matchesProject(path,data.project)))throw new Error('지원하지 않는 프로젝트입니다.');if(!matchesProject(data.project,state.folder))await setFolder(data.project);resume={cwd:data.project};} const result=await newTerminal(data.profile,resume&&{resumeId:resume.resumeId,cwd:resume.cwd,title:resume.title}); notify('remoteCreate',{request:data.request,session:result?.session||''}); } catch(e) { if(data.project&&e.message==='작업 폴더를 찾을 수 없습니다.'&&!matchesProject(data.project,state.folder)){state.settings.recent=state.settings.recent.filter(value=>!matchesProject(value,data.project));persist();} notify('remoteCreate',{request:data.request,error:e.message}); } });
+on('remoteCreate', async data => { try { if (!['codex','claude','powershell','cmd'].includes(data.profile)) throw new Error('지원하지 않는 터미널입니다.'); let resume=null;if(data.resumeId){if(!data.cwd||!data.title)throw new Error('저장된 대화 정보가 올바르지 않습니다.');const listed=await call('savedSessions',{cwd:state.folder,allWorkspaces:true}),items=Array.isArray(listed.sessions)?listed.sessions:[];resume=items.find(x=>x.provider===data.profile&&x.id===data.resumeId&&x.cwd===data.cwd);if(!resume)throw new Error('저장된 대화 정보를 다시 확인할 수 없습니다.');const open=state.terminals.find(t=>t.profile===resume.provider&&t.resumeId===resume.id&&!t.pane.exited);if(open){activateTerminal(open.id);open.pane.focus();notify('remoteCreate',{request:data.request,session:open.id});return;}} else if(data.project){if(!visibleProjects().some(path=>matchesProject(path,data.project)))throw new Error('지원하지 않는 프로젝트입니다.');resume={cwd:data.project};} const result=await newTerminal(data.profile,{resumeId:resume?.resumeId,cwd:resume?.cwd,title:resume?.title,secrets:Array.isArray(data.secrets)?data.secrets:undefined}); notify('remoteCreate',{request:data.request,session:result?.session||''}); } catch(e) { if(data.project&&e.message==='작업 폴더를 찾을 수 없습니다.'&&!matchesProject(data.project,state.folder)){state.settings.recent=state.settings.recent.filter(value=>!matchesProject(value,data.project));persist();} notify('remoteCreate',{request:data.request,error:e.message}); } });
 on('remoteProjects', data => { notify('remoteProjects', { request:data.request, projects: visibleProjects().map(path => ({ path, name: projectName(path) })), current: state.folder }); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Orbit · Agent workspace'; });
 
 async function initialize() {
   const data = await call('init');
   Object.assign(state.settings, data.settings || {});
-  setSidebarMode(state.settings.sidebarMode==='explorer'?'explorer':'saved',false);
   state.settings.fontSize = Math.max(11,Math.min(20,Number(state.settings.fontSize) || 13));
   state.settings.recent = Array.isArray(state.settings.recent) ? state.settings.recent.filter(x => typeof x === 'string').slice(0,8) : [];
   // This is deliberately UI-only state.  It hides a removed project from the
@@ -145,12 +145,13 @@ async function initialize() {
   if (state.settings.removedProjects.some(path => matchesProject(path, state.folder))) state.folder = '';
   renderHomeOrbit();
   updatePower();
+  if (!state.client) { showWorkspace(); if (state.folder) focusProject(state.folder); setSidebarMode(state.settings.sidebarMode === 'explorer' ? 'explorer' : 'sessions', false); }
 }
 async function setFolder(path) {
   if (!path) return;
   showWorkspace();
-  state.folder = path;
-  for (const id of ['folder-name','breadcrumb-folder']) $("#" + id).textContent = basename(path);
+  state.folder = path; refreshSecretCount();
+  $('#breadcrumb-folder').textContent = basename(path); state.panelsStale = false;
   $('#status-folder').textContent = path; $('#pick-folder').title = path;
   const matches = value => typeof value === 'string' && value.toLowerCase() === path.toLowerCase();
   state.settings.recent = [path, ...state.settings.recent.filter(x => !matches(x))].slice(0,8);
@@ -161,6 +162,7 @@ async function setFolder(path) {
   await refreshSavedSessions();
 }
 function showHome() {
+  refreshSecretCount();
   app.classList.add('home-active');
   renderHomeOrbit();
 }
@@ -328,7 +330,7 @@ function showProjectMenu(path, anchor) {
   menu.dataset.workspace = path;
   setProjectMenuPaused(path, true);
   const action = (label, run) => { const item = button(label, 'home-project-menu-item', guard(async () => { closeProjectMenu(); await run(); })); item.setAttribute('role', 'menuitem'); menu.append(item); };
-  action('작업 공간 열기', () => setFolder(path));
+  action('작업 공간 열기', () => openProject(path));
   action('프로젝트 이름 편집', () => editProjectName(path));
   action('프로젝트 제거', () => removeProject(path));
   menu.addEventListener('pointerdown', event => event.stopPropagation());
@@ -365,7 +367,6 @@ async function chooseLocal(mode) {
   const { openFilePicker } = await import('./file-picker.js');
   return openFilePicker({ mode, cwd: state.folder, workspace: state.folder, recent: state.settings.recent });
 }
-async function pickFolder() { const path = await chooseLocal('folder'); if (path) await setFolder(path); }
 function addRecentProject(path) {
   const matches = value => matchesProject(value, path);
   state.settings.recent = [path, ...state.settings.recent.filter(value => typeof value === 'string' && !matches(value))].slice(0, 8);
@@ -408,9 +409,11 @@ async function newTerminal(profile = state.settings.defaultShell, resume = null)
   const { TerminalPane } = await import('./terminal.js');
   const id = crypto.randomUUID(), p = profiles[profile];
   const cwd = resume?.cwd || state.folder;
-  const name = resume?.title || `${p.name} ${state.terminals.filter(t => t.profile === profile).length + 1}`;
-  const pane = new TerminalPane({ id, profile, cwd, resumeId: resume?.resumeId, name, settings: state.settings, openLink: guard(openLink), onExit: renderTerminals, onFocus: () => activateTerminal(id) });
-  const session = { id, profile, resumeId: resume?.resumeId || '', name, pane, createdAt: Date.now() };
+  if (!cwd) { newSessionDialog({ profile }); return null; }
+  const sameProject = state.terminals.filter(t => t.profile === profile && matchesProject(sessionProject(t), cwd)).length;
+  const name = resume?.title || sessionName(projectName(cwd), p.name, sameProject), label = resume?.title || sessionLabel(p.name, sameProject);
+  const pane = new TerminalPane({ id, profile, cwd, resumeId: resume?.resumeId, secrets: resume?.secrets, name, settings: state.settings, openLink: guard(openLink), onExit: renderTerminals, onFocus: () => activateTerminal(id), onOutput: () => noteOutput(id) });
+  const session = { id, profile, resumeId: resume?.resumeId || '', name, label, project: cwd, pane, createdAt: Date.now() };
   state.terminals.push(session); addToGroup(activeGroup(),id); state.active = id; renderTerminals();
   try { await pane.start(); renderTerminals(); if (profile === 'claude' || profile === 'codex') refreshSavedSessions().catch(() => {}); return { session: id, pid: pane.pid }; }
   catch (e) { removeTab(id); pane.dispose(); state.terminals = state.terminals.filter(t => t.id !== id); state.active = state.terminals.at(-1)?.id; renderTerminals(); throw e; }
@@ -421,33 +424,228 @@ function leafs(node=state.terminalRoot,result=[]) { if(node.type==='group') resu
 function activeGroup() { return leafs().find(g=>g.id===state.activeGroup) || leafs()[0]; }
 function addToGroup(group,id,index=group.tabs.length) { group.tabs.splice(index,0,id);group.active=id;state.activeGroup=group.id; }
 function findGroup(id) { return leafs().find(g=>g.tabs.includes(id)); }
-function activateTerminal(id) { const group=findGroup(id);if(!group)return;if(state.active===id && state.activeGroup===group.id)return;group.active=id;state.active=id;state.activeGroup=group.id;const node=document.querySelector(`.terminal-group[data-group-id="${group.id}"]`),session=state.terminals.find(t=>t.id===id);if(node&&session){node.querySelectorAll('.terminal-tab').forEach(tab=>{const active=tab.dataset.terminalId===id;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));});const body=node.querySelector('.terminal-group-body');body.replaceChildren(session.pane.element);session.pane.element.hidden=false;requestAnimationFrame(()=>session.pane.focus());}else renderTerminals(); }
+function activateTerminal(id) { const group=findGroup(id);if(!group)return;if(state.active===id && state.activeGroup===group.id)return;group.active=id;state.active=id;state.activeGroup=group.id;{const front=state.terminals.find(x=>x.id===id);if(front){front.unread=false;state.focusedTerminal=id;focusProject(sessionProject(front));updateSessionStatus(front);renderSessions();}}const node=document.querySelector(`.terminal-group[data-group-id="${group.id}"]`),session=state.terminals.find(t=>t.id===id);if(node&&session){node.querySelectorAll('.terminal-tab').forEach(tab=>{const active=tab.dataset.terminalId===id;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));});const body=node.querySelector('.terminal-group-body');body.replaceChildren(session.pane.element);session.pane.element.hidden=false;requestAnimationFrame(()=>session.pane.focus());}else renderTerminals(); }
 function replaceNode(node,oldNode,next) { if(node===oldNode) return next; if(node.type==='split') { node.first=replaceNode(node.first,oldNode,next);node.second=replaceNode(node.second,oldNode,next); } return node; }
 function compact(node) { if(node.type==='group')return node;node.first=compact(node.first);node.second=compact(node.second);if(node.first.type==='group'&&!node.first.tabs.length)return node.second;if(node.second.type==='group'&&!node.second.tabs.length)return node.first;return node; }
 function removeTab(id) { const group=findGroup(id);if(!group)return;group.tabs=group.tabs.filter(x=>x!==id);if(group.active===id)group.active=group.tabs.at(-1)||null;state.terminalRoot=compact(state.terminalRoot);const next=activeGroup();state.activeGroup=next.id;state.active=next.active||next.tabs[0]||null; }
 function splitGroup(group,id,side) { group.tabs=group.tabs.filter(x=>x!==id);if(group.active===id)group.active=group.tabs[0]||null;const fresh={type:'group',id:crypto.randomUUID(),tabs:[id],active:id};const first=(side==='left'||side==='top')?fresh:group,second=first===fresh?group:fresh;const split={type:'split',id:crypto.randomUUID(),direction:(side==='top'||side==='bottom')?'column':'row',ratio:.5,first,second};state.terminalRoot=replaceNode(state.terminalRoot,group,split);state.activeGroup=fresh.id;state.active=id; }
 function moveTab(id,target,edge,index) { const from=findGroup(id);if(!from)return;if(edge && edge!=='center') { if(from!==target){from.tabs=from.tabs.filter(x=>x!==id);if(from.active===id)from.active=from.tabs[0]||null;}splitGroup(target,id,edge);state.terminalRoot=compact(state.terminalRoot); } else { const old=from.tabs.indexOf(id);from.tabs=from.tabs.filter(x=>x!==id);if(from.active===id)from.active=from.tabs[0]||null;if(from===target && old>=0 && index>old)index--;addToGroup(target,id,Number.isInteger(index)?index:target.tabs.length);state.active=id;state.terminalRoot=compact(state.terminalRoot); }renderTerminals(); }
 function renderTerminalTab(group,t) { let tab=t.tabElement;if(!tab){tab=el('div','terminal-tab');tab.draggable=true;tab.dataset.terminalId=t.id;tab.setAttribute('role','tab');tab.ondragstart=e=>{e.dataTransfer.setData('text/orbit-terminal',t.id);e.dataTransfer.effectAllowed='move';};const b=button('', 'terminal-tab-name',()=>activateTerminal(t.id));b.append(el('span','tab-indicator'),el('span','',t.name));b.ondblclick=()=>renameTerminal(t);const close=button('','tab-close',guard(()=>closeTerminal(t)),'터미널 종료');close.append(icon('close'));tab.append(b,close);t.tabElement=tab;}const name=tab.querySelector('.terminal-tab-name'),indicator=tab.querySelector('.tab-indicator'),close=tab.querySelector('.tab-close');name.title=`${t.pane.cwd}${t.pane.pid?` · PID ${t.pane.pid}`:''}`;name.lastElementChild.textContent=t.name;indicator.classList.toggle('ended',t.pane.exited);close.setAttribute('aria-label',`${t.name} 종료`);tab.dataset.groupId=group.id;tab.classList.toggle('active',t.id===group.active);tab.setAttribute('aria-selected',String(t.id===group.active));return tab; }
-function renderGroup(group) { const node=el('section','terminal-group');node.dataset.groupId=group.id;node.tabIndex=0;node.setAttribute('role','region');node.setAttribute('aria-label','터미널 그룹');const tabs=el('div','terminal-tabs terminal-group-tabs');tabs.setAttribute('role','tablist');for(const id of group.tabs){const t=state.terminals.find(x=>x.id===id);if(t)tabs.append(renderTerminalTab(group,t));}const add=button('','tab-add',()=>launchDialog(group.id),'새 터미널');add.append(icon('plus'));tabs.append(add);const content=el('div','terminal-group-body');const active=state.terminals.find(t=>t.id===group.active)||state.terminals.find(t=>group.tabs.includes(t.id));if(active){group.active=active.id;active.pane.element.hidden=false;active.pane.element.classList.toggle('focused',state.active===active.id);content.append(active.pane.element);}node.append(tabs,content);setupDrop(tabs,group,true);setupDrop(content,group);return node; }
+function renderGroup(group) { const node=el('section','terminal-group');node.dataset.groupId=group.id;node.tabIndex=0;node.setAttribute('role','region');node.setAttribute('aria-label','터미널 그룹');const tabs=el('div','terminal-tabs terminal-group-tabs');tabs.setAttribute('role','tablist');for(const id of group.tabs){const t=state.terminals.find(x=>x.id===id);if(t)tabs.append(renderTerminalTab(group,t));}const add=button('','tab-add',()=>newSessionDialog({groupId:group.id}),'새 세션');add.append(icon('plus'));tabs.append(add);const content=el('div','terminal-group-body');const active=state.terminals.find(t=>t.id===group.active)||state.terminals.find(t=>group.tabs.includes(t.id));if(active){group.active=active.id;active.pane.element.hidden=false;active.pane.element.classList.toggle('focused',state.active===active.id);content.append(active.pane.element);}node.append(tabs,content);setupDrop(tabs,group,true);setupDrop(content,group);return node; }
 function renderNode(tree) { if(tree.type==='group')return renderGroup(tree);const node=el('div',`terminal-split ${tree.direction}`);node.dataset.splitId=tree.id;node.style.setProperty('--split-first',`${tree.ratio*100}%`);node.append(renderNode(tree.first),makeSplitter(tree),renderNode(tree.second));return node; }
 function setupDrop(node,group,forceCenter=false) { node.ondragover=e=>{if(!e.dataTransfer.types.includes('text/orbit-terminal'))return;e.preventDefault();const r=node.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;const edge=forceCenter?'':x<.22?'left':x>.78?'right':y<.22?'top':y>.78?'bottom':'';node.dataset.drop=edge||'center';e.dataTransfer.dropEffect='move';};node.ondragleave=()=>delete node.dataset.drop;node.ondrop=e=>{e.preventDefault();const id=e.dataTransfer.getData('text/orbit-terminal'),edge=node.dataset.drop;delete node.dataset.drop;if(!id)return;let index;if(forceCenter)index=[...node.querySelectorAll('.terminal-tab')].findIndex(tab=>e.clientX<tab.getBoundingClientRect().left+tab.getBoundingClientRect().width/2);moveTab(id,group,edge,index<0?group.tabs.length:index);}; }
 function makeSplitter(tree) { const splitter=el('div',`terminal-splitter ${tree.direction}`);splitter.dataset.splitId=tree.id;splitter.tabIndex=0;splitter.setAttribute('role','separator');splitter.setAttribute('aria-orientation',tree.direction==='row'?'vertical':'horizontal');const adjust=delta=>{tree.ratio=Math.max(.18,Math.min(.82,tree.ratio+delta));renderTerminals();};splitter.onpointerdown=e=>{splitter.setPointerCapture(e.pointerId);const start=tree.ratio,box=splitter.parentElement.getBoundingClientRect(),axis=tree.direction==='row'?box.width:box.height,origin=tree.direction==='row'?e.clientX:e.clientY;const move=m=>{tree.ratio=Math.max(.18,Math.min(.82,start+((tree.direction==='row'?m.clientX:m.clientY)-origin)/axis));splitter.parentElement.style.setProperty('--split-first',`${tree.ratio*100}%`);};splitter.onpointermove=move;splitter.onpointerup=()=>{splitter.onpointermove=null;renderTerminals();};};splitter.onkeydown=e=>{if(['ArrowLeft','ArrowUp'].includes(e.key)){e.preventDefault();adjust(-.04);}if(['ArrowRight','ArrowDown'].includes(e.key)){e.preventDefault();adjust(.04);}};return splitter; }
-function renderTerminals() { const has=state.terminals.length>0,layout=$('#terminal-layout');$('#welcome').hidden=has;layout.hidden=!has;layout.replaceChildren();if(has)layout.append(renderNode(state.terminalRoot));$('#session-count').textContent=state.terminals.length;$('#status-sessions').textContent=`${state.terminals.filter(t=>!t.pane.exited).length}개 실행 중`;requestAnimationFrame(()=>{const t=activeTerminal();if(t)t.pane.focus();});renderSavedSessions(); }
+function renderTerminals() { const has=state.terminals.length>0,layout=$('#terminal-layout');$('#welcome').hidden=has;layout.hidden=!has;layout.replaceChildren();if(has)layout.append(renderNode(state.terminalRoot));$('#status-sessions').textContent=`${state.terminals.filter(t=>!t.pane.exited).length}개 실행 중`;requestAnimationFrame(()=>{const t=activeTerminal();if(t)t.pane.focus();});renderSavedSessions();markSecretAsks();state.terminals.forEach(updateSessionStatus);renderSessions();syncFocusedProject(); }
 async function closeTerminal(t) {
   if (!t.pane.exited && !t.pane.attached && !await confirm('터미널 종료', `${t.name}과 연결된 에이전트 및 하위 프로세스를 종료합니다.`, '종료')) return;
   if (t.pane.attached) (state.dismissedHost ||= new Set()).add(t.id); // do not re-attach a tab the user closed
   await call(t.pane.attached ? 'detachTerminal' : 'closeTerminal', { session: t.id }).catch(e => { if (!t.pane.attached) throw e; });removeTab(t.id);t.pane.dispose();state.terminals = state.terminals.filter(x => x !== t);renderTerminals();
 }
-async function renameTerminal(t) { const input = el('input','dialog-input');input.value = t.name; const answer = await dialog('터미널 이름', node => node.append(input), [{value:'cancel',label:'취소'},{value:'save',label:'변경',primary:true}]);if(answer==='save' && input.value.trim()){t.name=input.value.trim().slice(0,40);t.pane.name=t.name;notify('terminalName',{session:t.id,name:t.name});renderTerminals();} }
+async function renameTerminal(t) { const input = el('input','dialog-input');input.value = t.name; const answer = await dialog('터미널 이름', node => node.append(input), [{value:'cancel',label:'취소'},{value:'save',label:'변경',primary:true}]);if(answer==='save' && input.value.trim()){t.name=input.value.trim().slice(0,40);t.label=t.name;t.pane.name=t.name;notify('terminalName',{session:t.id,name:t.name});renderTerminals();} }
 async function toggleSplit() { const group=activeGroup(),id=group.active;if(!id||group.tabs.length<2){toast('같은 그룹에 터미널 탭이 2개 이상 있어야 분할할 수 있습니다.');return;}splitGroup(group,id,'right');renderTerminals(); }
-function launchDialog(groupId) {
-  if(groupId)state.activeGroup=groupId;
-  dialog('새 터미널', node => {
-    node.append(el('p','muted',`작업 폴더 · ${state.folder}`));const choices = el('div','launch-choices');
-    for(const [key,p] of Object.entries(profiles)){const b=button('', 'launch-choice', guard(async()=>{$('#modal').close();await newTerminal(key);}));b.append(el('span',`choice-mark ${p.class}`,p.mark),el('strong','',p.name),el('small','muted',p.subtitle));choices.append(b);}node.append(choices);
-    node.append(el('p','dialog-note','CLI는 PC에 설치되어 있고 PATH에서 실행 가능해야 합니다. 로그인과 권한 요청은 각 터미널에서 진행합니다.'));
+// ---- Sessions. The window is organised around running agent sessions, each tied to the project it was opened in, so sessions of
+// different projects (and Claude next to Codex) can be kept open and switched between. There is no single "open project".
+const sessionProject = t => t.project || t.pane.cwd || state.folder || '';
+// The project the window "is on" follows the session in front. It only relabels and re-scopes things; nothing is reloaded until a panel that needs it is opened.
+function focusProject(path) {
+  if (!path) return;
+  const changed = !matchesProject(path, state.folder);
+  state.folder = path;
+  $('#breadcrumb-folder').textContent = projectName(path); $('#status-folder').textContent = path;
+  if (changed) { refreshSecretCount(); state.panelsStale = true; refreshProjectPanels(); }
+}
+let panelTimer = 0;
+function refreshProjectPanels() {
+  if (!state.panelsStale || state.settings.sidebarMode === 'sessions' || !state.folder) return;
+  clearTimeout(panelTimer);
+  panelTimer = setTimeout(() => { state.panelsStale = false; refreshTree().catch(() => {}); refreshSavedSessions().catch(() => {}); }, 200);
+}
+function syncFocusedProject() {
+  const front = activeTerminal();
+  if (front && state.focusedTerminal !== front.id) { state.focusedTerminal = front.id; focusProject(sessionProject(front)); }
+}
+function renderSessions() {
+  const box = $('#session-list'); if (!box) return;
+  const groups = groupByProject(state.terminals, sessionProject);
+  if (!groups.length) { box.replaceChildren(el('p', 'tree-hint', '아직 세션이 없어요. ＋ 새 세션으로 시작하세요.')); return; }
+  box.replaceChildren(...groups.map(group => {
+    const section = el('section', 'session-group'), head = el('div', 'session-group-head'), add = button('', 'session-group-add', guard(async () => newSessionDialog({ project: group.path })), `${projectName(group.path)}에 세션 추가`);
+    add.append(icon('plus')); add.setAttribute('aria-label', `${projectName(group.path)}에 세션 추가`);
+    const title = el('strong', '', projectName(group.path) || '프로젝트 없음'); title.title = group.path;
+    head.append(title, add); section.append(head);
+    for (const t of group.items) section.append(sessionRow(t));
+    return section;
+  }));
+}
+function sessionRow(t) {
+  const row = el('div', 'session-row'), status = t.status || { key: 'idle', label: '대기' };
+  row.dataset.terminalId = t.id; row.dataset.status = status.key; row.classList.toggle('active', state.active === t.id);
+  const open = button('', 'session-row-open', guard(async () => { activateTerminal(t.id); t.pane.focus(); }), `${t.name} · ${sessionProject(t)}`);
+  const mark = profiles[t.profile] ? icon(t.profile === 'codex' || t.profile === 'claude' ? t.profile : 'terminal') : icon('terminal');
+  open.append(el('span', 'session-dot'), mark, el('span', 'session-label', t.label || t.name), el('span', 'session-status', status.label));
+  const close = button('', 'session-row-close', guard(() => closeTerminal(t)), '세션 종료'); close.append(icon('close')); close.setAttribute('aria-label', `${t.name} 종료`);
+  row.append(open, close); return row;
+}
+// What a session is doing, judged from its output: output arriving makes it "working" at once, and a single timer notices when it has gone quiet.
+// A session in front never counts as unread. No polling: nothing runs while nothing is printed.
+const sessionInView = t => !app.classList.contains('home-active') && !document.hidden && leafs().some(group => group.active === t.id);
+function updateSessionStatus(t) {
+  const now = Date.now(), asking = [...secretAsks.values()].some(ask => ask.session === t.id);
+  if (sessionInView(t)) t.unread = false;
+  const next = sessionStatus({ exited: t.pane.exited, asking, now, lastOutputAt: t.lastOutputAt, unread: t.unread });
+  if (t.status?.key !== next.key || t.status?.label !== next.label) { t.status = next; paintStatus(t); }
+  if (next.key === 'working' && !t.quietTimer) t.quietTimer = setTimeout(() => { t.quietTimer = 0; updateSessionStatus(t); }, Math.max(300, 2600 - (now - t.lastOutputAt)));
+}
+function noteOutput(id) {
+  const t = state.terminals.find(x => x.id === id); if (!t) return;
+  t.lastOutputAt = Date.now();
+  if (!sessionInView(t)) t.unread = true;
+  updateSessionStatus(t);
+}
+function paintStatus(t) {
+  const status = t.status; if (!status) return;
+  document.querySelectorAll(`.session-row[data-terminal-id="${t.id}"]`).forEach(row => { row.dataset.status = status.key; row.querySelector('.session-status').textContent = status.label; });
+  if (t.tabElement) t.tabElement.dataset.status = status.key;
+}
+// One dialog picks both things: which project, and which agent to start in it.
+function newSessionDialog({ profile, project, groupId } = {}) {
+  if (groupId) state.activeGroup = groupId;
+  const front = activeTerminal();
+  let chosen = project || (front ? sessionProject(front) : '') || state.folder || visibleProjects()[0] || '';
+  dialog('새 세션', node => {
+    node.append(el('small', 'muted', '프로젝트'));
+    const list = el('div', 'project-choices'), agents = el('div', 'launch-choices agent-choices'), cards = [];
+    const shown = () => [chosen, ...visibleProjects()].filter((path, index, all) => path && all.findIndex(value => matchesProject(value, path)) === index).slice(0, 9);
+    const paint = () => {
+      list.replaceChildren(...shown().map(path => {
+        const row = button('', `project-choice${matchesProject(path, chosen) ? ' selected' : ''}`, () => { chosen = path; paint(); });
+        row.append(el('strong', '', projectName(path)), el('small', 'muted', path)); row.title = path; return row;
+      }));
+      cards.forEach(card => { card.disabled = !chosen; });
+    };
+    const other = button('＋ 다른 폴더 선택…', 'project-choice project-other', guard(async () => {
+      $('#modal').close();
+      const path = await chooseLocal('folder');
+      if (path) addRecentProject(path);
+      newSessionDialog({ profile, project: path || chosen, groupId });
+    }));
+    for (const key of ['claude', 'codex']) {
+      const p = profiles[key], card = button('', 'launch-choice agent-choice', guard(async () => { $('#modal').close(); await launchSession(key, chosen); }));
+      card.dataset.profile = key; card.append(el('span', `choice-mark ${p.class}`, p.mark), el('strong', '', p.name), el('small', 'muted', p.subtitle)); agents.append(card); cards.push(card);
+    }
+    const shells = el('div', 'agent-shells');
+    for (const key of ['powershell', 'cmd']) {
+      const p = profiles[key], b = button(p.name, 'secondary agent-choice', guard(async () => { $('#modal').close(); await launchSession(key, chosen); })); b.dataset.profile = key; shells.append(b); cards.push(b);
+    }
+    node.append(list, other, el('small', 'muted', '에이전트'), agents, shells, el('p', 'dialog-note', 'CLI는 PC에 설치되어 있고 PATH에서 실행 가능해야 합니다. 로그인과 권한 요청은 각 세션에서 진행합니다.'));
+    paint();
+    requestAnimationFrame(() => (cards.find(card => card.dataset.profile === profile) || cards[0])?.focus());
   });
 }
+async function launchSession(profile, project) {
+  if (!project) throw new Error('프로젝트를 먼저 선택해 주세요.');
+  addRecentProject(project);
+  await newTerminal(profile, { cwd: project });
+}
+async function pickFolderForSession() { const path = await chooseLocal('folder'); if (path) { addRecentProject(path); newSessionDialog({ project: path }); } }
+// A project chosen on the Home screen: go to its running session, or start one.
+async function openProject(path) {
+  addRecentProject(path); showWorkspace();
+  const running = state.terminals.find(t => !t.pane.exited && matchesProject(sessionProject(t), path));
+  if (running) { activateTerminal(running.id); running.pane.focus(); } else { focusProject(path); newSessionDialog({ project: path }); }
+}
+// ---- API keys. The vault lives on the host and encrypts every value; this UI only ever sees names. A key is stored for all projects or for one
+// project, and a terminal keeps the project it was opened in, so terminals of different projects can run side by side with different keys.
+const secretAsks = new Map();
+// "proj-a · CMD": the terminal's own name already starts with its project, so only add the project when it does not.
+const askWhere = ask => { const project = projectLabel(ask.project) || ask.projectName || '', terminal = ask.terminal || ''; return terminal.toLowerCase().startsWith(project.toLowerCase()) ? terminal : [project, terminal].filter(Boolean).join(' · '); };
+const projectLabel = path => path ? basename(path) : '';
+const secretProject = () => app.classList.contains('home-active') ? '' : (state.folder || '');
+async function refreshSecretCount() {
+  try {
+    const { keys } = await call('secretList', { project: secretProject() });
+    document.querySelectorAll('.secrets-count').forEach(node => { node.textContent = keys.length; node.hidden = !keys.length; });
+  } catch { /* the vault is only reachable in the desktop app */ }
+}
+function secretsDialog() {
+  const project = secretProject();
+  dialog('API 키 보관함', node => {
+    node.append(el('p', 'dialog-note', project ? `“${projectLabel(project)}” 프로젝트와 모든 프로젝트용 키예요. 새로 여는 Claude·Codex 터미널에 자동으로 들어가고, AI에게는 값이 보이지 않아요.` : '모든 프로젝트에서 쓰는 키예요. 프로젝트를 열면 그 프로젝트 전용 키도 관리할 수 있어요.'));
+    const list = el('div', 'secret-list'), form = el('div', 'secret-form'), value = el('input', 'dialog-input'), name = el('input', 'dialog-input'), scope = el('select', 'dialog-input secret-scope');
+    value.type = 'password'; value.placeholder = 'API 키를 붙여넣으세요'; value.autocomplete = 'off';
+    name.placeholder = '이름 (예: OPENAI_API_KEY)'; name.autocomplete = 'off'; name.setAttribute('list', 'secret-name-options');
+    const options = document.createElement('datalist'); options.id = 'secret-name-options'; for (const known of commonSecretNames) options.append(new Option(known));
+    if (project) { scope.append(new Option(`이 프로젝트만 (${projectLabel(project)})`, 'project'), new Option('모든 프로젝트', 'global')); } else scope.hidden = true;
+    let named = false; name.oninput = () => { named = true; }; value.oninput = () => { if (!named) name.value = suggestSecretName(value.value); };
+    const add = button('＋ 키 추가', 'secondary secret-add', () => setForm(true));
+    const cancel = button('취소', 'secondary', () => { setForm(false); value.value = ''; name.value = ''; named = false; });
+    const save = guard(async () => {
+      const problem = secretNameProblem(name.value); if (problem) throw new Error(problem);
+      if (!value.value.trim()) throw new Error('키 값을 붙여넣어 주세요.');
+      const result = await call('secretSet', { name: name.value.trim(), value: value.value, scope: project ? scope.value : 'global', project });
+      value.value = ''; name.value = ''; named = false; render(result); setForm(false); toast('저장했어요.');
+    });
+    const save2 = button('저장', 'primary', save);
+    value.onkeydown = name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); save(); } };
+    const actions = el('div', 'secret-form-actions'); actions.append(cancel, save2);
+    form.append(value, name, scope, options, actions);
+    let editing = false;
+    const setForm = on => { editing = on; form.hidden = !on; add.hidden = on; if (on) value.focus(); };
+    const rowFor = key => {
+      const row = el('div', 'secret-row'), tag = el('span', 'secret-tag', key.scope === 'project' ? '이 프로젝트' : '모든 프로젝트');
+      const del = button('삭제', 'secret-delete', guard(async () => {
+        if (!del.classList.contains('confirm')) { del.classList.add('confirm'); del.textContent = '한 번 더 눌러 삭제'; setTimeout(() => { if (del.isConnected) { del.classList.remove('confirm'); del.textContent = '삭제'; } }, 3000); return; }
+        render(await call('secretDelete', { name: key.name, scope: key.scope, project }));
+      }));
+      row.append(el('code', '', key.name), tag, del); return row;
+    };
+    const render = result => {
+      const keys = result.keys || []; list.replaceChildren(...keys.map(rowFor)); list.hidden = !keys.length;
+      setForm(!keys.length || editing); refreshSecretCount();
+    };
+    node.append(list, add, form, el('small', 'muted secret-foot', '일반 PowerShell·CMD에는 자동으로 넣지 않아요. 필요하면 orbit-secret run -- 명령'));
+    form.hidden = true; add.hidden = true;
+    call('secretList', { project }).then(render).catch(e => toast(e.message, true));
+  });
+}
+// An AI in a terminal ran "orbit-secret request NAME". A card says which project and terminal asked and waits: it never takes the screen over,
+// so the user can finish what they are doing first. The key is typed here, so it goes to the host and never through a terminal.
+function renderSecretAsks() {
+  let box = $('#secret-asks');
+  if (!box) { box = el('div', 'secret-asks'); box.id = 'secret-asks'; box.setAttribute('aria-live', 'polite'); document.body.append(box); }
+  box.replaceChildren(...[...secretAsks.values()].map(ask => {
+    const card = el('div', 'secret-ask'), text = el('div', 'secret-ask-text');
+    text.append(el('strong', '', `${ask.name} 요청`), el('small', '', askWhere(ask)));
+    const actions = el('div', 'secret-ask-actions');
+    actions.append(button('거절', 'secondary', guard(async () => { secretAsks.delete(ask.request); renderSecretAsks(); await call('secretAnswer', { request: ask.request, status: 'denied' }); })), button('입력', 'primary', () => secretAskDialog(ask)));
+    card.append(text, actions); return card;
+  }));
+  box.hidden = !secretAsks.size; markSecretAsks(); state.terminals.forEach(updateSessionStatus);
+}
+function markSecretAsks() {
+  const asking = new Set([...secretAsks.values()].map(ask => ask.session));
+  document.querySelectorAll('.terminal-tab').forEach(tab => tab.classList.toggle('asks-key', asking.has(tab.dataset.terminalId)));
+}
+function secretAskDialog(ask) {
+  const project = ask.project || '';
+  dialog('API 키를 입력하세요', node => {
+    node.append(el('p', 'secret-ask-name', ask.name), el('p', 'dialog-note', askWhere(ask) + (ask.reason ? ` — ${ask.reason}` : '')));
+    const value = el('input', 'dialog-input'), scope = el('select', 'dialog-input secret-scope');
+    value.type = 'password'; value.placeholder = 'API 키를 붙여넣으세요'; value.autocomplete = 'off';
+    if (project) scope.append(new Option(`이 프로젝트만 (${projectLabel(project)})`, 'project'), new Option('모든 프로젝트', 'global')); else scope.hidden = true;
+    const save = guard(async () => {
+      if (!value.value.trim()) throw new Error('키 값을 붙여넣어 주세요.');
+      await call('secretSet', { name: ask.name, value: value.value, scope: project ? scope.value : 'global', project });
+      value.value = ''; await call('secretAnswer', { request: ask.request, status: 'saved' });
+      secretAsks.delete(ask.request); renderSecretAsks(); refreshSecretCount(); $('#modal').close('saved'); toast('저장했어요. AI가 이어서 작업해요.');
+    });
+    value.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); save(); } };
+    node.append(value, scope, button('저장', 'primary', save), el('small', 'muted', '암호화되어 저장되고 AI에게는 보이지 않아요.'));
+    requestAnimationFrame(() => value.focus());
+  });
+}
+on('secretRequest', ask => { secretAsks.set(ask.request, ask); renderSecretAsks(); });
+on('secretRequestClosed', ({ request }) => { if (secretAsks.delete(request)) renderSecretAsks(); });
 function terminalSearch() {
   const t=activeTerminal();if(!t){toast('먼저 터미널을 열어 주세요.');return;}
   dialog('터미널에서 찾기',node=>{const input=el('input','dialog-input');input.placeholder='검색어';const count=el('p','muted','입력 후 Enter로 다음 결과를 찾습니다.');const find=()=>{const found=t.pane.search.findNext(input.value,{incremental:true});count.textContent=found?'일치하는 결과를 표시했습니다.':'일치하는 결과가 없습니다.';};input.addEventListener('input',find);input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();t.pane.search.findNext(input.value);}});node.append(input,count);});
@@ -563,7 +761,7 @@ function promptLibrary(){
     node.append(select,title,text,actions,el('p','dialog-note','에이전트가 입력을 기다리는 터미널을 선택해 주세요. 여러 줄 입력은 셸에서 바로 실행될 수 있습니다.'));
   });
 }
-function recentFolders(){dialog('최근 작업 폴더',node=>{for(const path of state.settings.recent)node.append(button(path,'recent-folder',guard(async()=>{$('#modal').close();await setFolder(path);})));});}
+function recentFolders(){dialog('최근 작업 폴더',node=>{for(const path of state.settings.recent)node.append(button(path,'recent-folder',guard(async()=>{$('#modal').close();newSessionDialog({project:path});})));});}
 function updatePower(){$('#power-label').textContent=state.settings.lowPower?'가볍게 실행 중':'넉넉한 기록 모드';$('#power-detail').textContent=`${state.settings.lowPower?'절약 모드':'일반 모드'} · 스크롤 기록 ${state.settings.lowPower?'500':'2,000'}줄`;}
 function applyTheme() {
   document.documentElement.dataset.theme = state.settings.theme;
@@ -641,8 +839,8 @@ async function attachHostTerminal(info){
   const snapshot=await call('attachTerminal',{session:info.id});
   const { TerminalPane } = await import('./terminal.js');
   const profile=profiles[info.profile]?info.profile:'powershell',name=info.name||profiles[profile].name;
-  const pane=new TerminalPane({ id:info.id, profile, cwd:state.folder, name, settings:state.settings, openLink:guard(openLink), onExit:renderTerminals, onFocus:()=>activateTerminal(info.id), attach:snapshot });
-  const session={ id:info.id, profile, resumeId:'', name, pane, createdAt:Date.now() };
+  const pane=new TerminalPane({ id:info.id, profile, cwd:state.folder, name, settings:state.settings, openLink:guard(openLink), onExit:renderTerminals, onFocus:()=>activateTerminal(info.id), onOutput:()=>noteOutput(info.id), attach:snapshot });
+  const session={ id:info.id, profile, resumeId:'', name, label:name, project:state.folder, pane, createdAt:Date.now() };
   state.terminals.push(session); addToGroup(activeGroup(),info.id); if(!state.active)state.active=info.id; renderTerminals();
   await pane.start();
 }
@@ -672,7 +870,6 @@ async function refreshClientProjects(){
   catch(e){toast(e.message,true);}
 }
 // In client mode the workspace is this same UI; its file and terminal calls are forwarded to the host by the native side.
-const openProject = path => setFolder(path);
 // One button: make this PC the host. Tailscale is checked/installed on demand, the account is only asked for while this PC is
 // not linked yet, and phones/tablets join by scanning a QR (no account needed).
 async function remoteDevices(){
@@ -774,13 +971,13 @@ async function preferences(){
   });
 }
 function commands(){
-  const actions=[['새 기본 터미널','Ctrl Shift T',()=>newTerminal()],['Codex 실행','',()=>newTerminal('codex')],['Claude 실행','',()=>newTerminal('claude')],['파일 열기','Ctrl O',openFilePicker],['작업 폴더 열기','',pickFolder],['파일 저장','Ctrl S',saveFile],['터미널 분할','Ctrl Shift D',toggleSplit],['프롬프트 보관함','',promptLibrary],['파일 새로고침','',refreshTree],['설정 및 사용량','',preferences]];
+  const actions=[['새 세션','Ctrl Shift N',()=>newSessionDialog()],['새 기본 터미널','Ctrl Shift T',()=>newTerminal()],['Codex 실행','',()=>newSessionDialog({profile:'codex'})],['Claude 실행','',()=>newSessionDialog({profile:'claude'})],['터미널에서 찾기','Ctrl Shift F',terminalSearch],['클립보드를 터미널에 붙여넣기','Ctrl V',pasteClipboardToActive],['파일 열기','Ctrl O',openFilePicker],['폴더를 골라 새 세션 시작','',pickFolderForSession],['파일 저장','Ctrl S',saveFile],['터미널 분할','Ctrl Shift D',toggleSplit],['프롬프트 보관함','',promptLibrary],['API 키 보관함','',secretsDialog],['파일 새로고침','',refreshTree],['설정 및 사용량','',preferences]];
   dialog('명령 찾기',node=>{const input=el('input','dialog-input');input.placeholder='무엇을 할까요?';const list=el('div','command-list');const render=()=>{list.replaceChildren();for(const [label,key,action] of actions.filter(a=>a[0].toLowerCase().includes(input.value.toLowerCase()))){const b=button('','command-item',guard(async()=>{$('#modal').close();await action();}));b.append(el('span','',label),el('kbd','',key));list.append(b);}};input.oninput=render;input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();list.querySelector('button')?.click();}};node.append(input,list);render();});
 }
 document.addEventListener('keydown',e=>{
   if(!e.ctrlKey || e.altKey)return;
   if(document.querySelector('dialog[open]'))return;
-  const action=e.shiftKey?({KeyT:()=>newTerminal(),KeyD:toggleSplit,KeyW:()=>activeTerminal()&&closeTerminal(activeTerminal()),KeyF:terminalSearch})[e.code]:({KeyO:openFilePicker,KeyS:saveFile,KeyK:commands,KeyP:commands,KeyB:()=>app.classList.toggle('sidebar-hidden')})[e.code];
+  const action=e.shiftKey?({KeyT:()=>newTerminal(),KeyN:()=>newSessionDialog(),KeyD:toggleSplit,KeyW:()=>activeTerminal()&&closeTerminal(activeTerminal()),KeyF:terminalSearch})[e.code]:({KeyO:openFilePicker,KeyS:saveFile,KeyK:commands,KeyP:commands,KeyB:()=>app.classList.toggle('sidebar-hidden')})[e.code];
   if(action){e.preventDefault();guard(action)();}
 });
 const resizer=$('#editor-resizer');
@@ -794,7 +991,7 @@ const layoutSnapshot=node=>node.type==='group'?{type:'group',id:node.id,tabs:[..
 window.orbitDiagnostics=()=>({ready:!!state.folder,activeGroup:state.activeGroup,layout:layoutSnapshot(state.terminalRoot),sessions:state.terminals.map(t=>{
   const buffer=t.pane.term.buffer.active, first=Math.max(0,buffer.baseY+buffer.cursorY-80), lines=[];
   for(let y=first;y<buffer.length;y++) lines.push(buffer.getLine(y)?.translateToString(true) || '');
-  return {id:t.id,profile:t.profile,resumeId:t.resumeId,pid:t.pane.pid,exited:t.pane.exited,cols:t.pane.term.cols,rows:t.pane.term.rows,outputCount:t.pane.outputCount,output:lines.join('\n')};
+  return {id:t.id,profile:t.profile,resumeId:t.resumeId,pid:t.pane.pid,exited:t.pane.exited,cols:t.pane.term.cols,rows:t.pane.term.rows,outputCount:t.pane.outputCount,status:t.status?.key||'',output:lines.join('\n')};
 }),files:state.files.map(f=>({name:f.name,dirty:f.dirty})),editor:!!state.editor,windowControls:document.querySelectorAll('.window-controls button').length});
 // Used only by the native --ui-test harness. It drives the same public UI state,
 // bridge calls, CodeMirror view and xterm input used by a normal desktop session.
