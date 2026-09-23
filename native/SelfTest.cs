@@ -103,6 +103,18 @@ namespace Orbit {
                 Files.Move(sub,root);
                 if(Directory.Exists(sub)||!File.Exists(Path.Combine(root,"sub","b.txt")))throw new Exception("folder was not moved");
             });
+            test("files dropped from Explorer are moved or copied into the tree",()=> {
+                string outside=Path.Combine(dir,"explorer drop"),project=Path.Combine(dir,"drop project"),pack=Path.Combine(outside,"pack");
+                Directory.CreateDirectory(Path.Combine(pack,"inner"));Directory.CreateDirectory(project);
+                File.WriteAllText(Path.Combine(outside,"one.txt"),"1");File.WriteAllText(Path.Combine(outside,"two.txt"),"2");File.WriteAllText(Path.Combine(pack,"inner","x.txt"),"x");File.WriteAllText(Path.Combine(project,"two.txt"),"keep");
+                var json=new JavaScriptSerializer();
+                string moved=json.Serialize(Files.Import(new[]{Path.Combine(outside,"one.txt"),Path.Combine(outside,"two.txt"),pack},project,false));
+                if(File.Exists(Path.Combine(outside,"one.txt"))||File.ReadAllText(Path.Combine(project,"one.txt"))!="1")throw new Exception("dropped file was not moved: "+moved);
+                if(!File.Exists(Path.Combine(outside,"two.txt"))||File.ReadAllText(Path.Combine(project,"two.txt"))!="keep"||!moved.Contains("two.txt: "))throw new Exception("name clash was not reported or overwrote: "+moved);
+                if(Directory.Exists(pack)||File.ReadAllText(Path.Combine(project,"pack","inner","x.txt"))!="x")throw new Exception("dropped folder was not moved");
+                Files.Import(new[]{Path.Combine(outside,"two.txt")},Path.Combine(project,"pack"),true);
+                if(!File.Exists(Path.Combine(outside,"two.txt"))||File.ReadAllText(Path.Combine(project,"pack","two.txt"))!="2")throw new Exception("Ctrl drop did not copy");
+            });
             test("picker directory navigation and exclusive file creation",()=> {
                 string folder=Path.Combine(dir,"선택 폴더");
                 string child=Path.Combine(folder,"하위 폴더");

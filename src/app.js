@@ -1,6 +1,6 @@
 import './styles.css';
 import { $, el, button, icon, iconButton, toast, guard, dialog, confirm } from './ui.js';
-import { call, notify, on, isDesktop } from './bridge.js';
+import { call, callWithFiles, canSendFiles, notify, on, isDesktop } from './bridge.js';
 import { commonSecretNames, secretNameProblem, suggestSecretName } from './secret-hints.js';
 import { sessionStatus, groupByProject, sessionName, sessionLabel } from './session-status.js';
 import { parseLocation } from './links.js';
@@ -393,20 +393,33 @@ const canMove = (source, folder) => !!source && !!folder && !within(folder, sour
 async function moveEntry(source, folder) {
   const { path } = await call('move', { path: source, target: folder });
   // Open editor tabs follow the file (or the files inside a moved folder).
-    row.draggable = true;
-    row.addEventListener('dragstart', event => { draggedEntry = entry.path; event.dataTransfer.setData('text/orbit-file', entry.path); event.dataTransfer.effectAllowed = 'move'; row.classList.add('dragging'); });
-    row.addEventListener('dragend', () => { draggedEntry = ''; row.classList.remove('dragging'); document.querySelectorAll('.drop-target').forEach(node => node.classList.remove('drop-target')); });
-    if (entry.directory) dropTarget(row, () => entry.path);
-    if (entry.directory && open?.has(entry.path.toLowerCase())) { const nested = el('div','tree-children'); row.after(nested); row.classList.add('expanded'); await loadTree(entry.path, nested, depth + 1, open); }
   for (const file of state.files) if (within(file.path, source)) file.path = path + file.path.slice(source.length);
   renderFileTabs(); await refreshTree(); toast(`${path.split(/[\\/]/).at(-1)} 을(를) 옮겼습니다.`);
 }
 const moveDropped = guard(moveEntry);
+// From Windows Explorer: the dropped files are moved into the folder (held Ctrl copies them instead, as in Explorer).
+// Only on this PC's own files: a remote client's files are not on the host.
+const fromExplorer = event => canSendFiles && !state.client && !draggedEntry && event.dataTransfer.types.includes('Files');
+const importDropped = guard(async (files, folder, copy) => {
+  const { paths, errors } = await callWithFiles('dropFiles', { target: folder, copy }, files);
+  await refreshTree();
+  if (paths.length) toast(`${paths.length}개 항목을 ${copy ? '복사' : '옮겼'}습니다.`);
+  if (errors.length) toast(errors.join('\n'), true);
+});
+// One highlight at a time: the tree itself (project root) or the folder row under the pointer.
+const clearDropTargets = () => document.querySelectorAll('.drop-target').forEach(node => node.classList.remove('drop-target'));
 function dropTarget(node, folder) {
-  node.addEventListener('dragover', event => { if (!event.dataTransfer.types.includes('text/orbit-file') || !canMove(draggedEntry, folder())) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; node.classList.add('drop-target'); });
+  node.addEventListener('dragover', event => {
+    const outside = fromExplorer(event);
+    if (!outside && (!event.dataTransfer.types.includes('text/orbit-file') || !canMove(draggedEntry, folder()))) return;
+    event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = outside && event.ctrlKey ? 'copy' : 'move';
+    if (!node.classList.contains('drop-target')) { clearDropTargets(); node.classList.add('drop-target'); }
+  });
   node.addEventListener('dragleave', event => { if (!node.contains(event.relatedTarget)) node.classList.remove('drop-target'); });
   node.addEventListener('drop', event => {
-    node.classList.remove('drop-target'); if (!event.dataTransfer.types.includes('text/orbit-file')) return;
+    clearDropTargets();
+    if (fromExplorer(event)) { event.preventDefault(); event.stopPropagation(); const files = [...event.dataTransfer.files]; if (files.length) importDropped(files, folder(), event.ctrlKey); return; }
+    if (!event.dataTransfer.types.includes('text/orbit-file')) return;
     event.preventDefault(); event.stopPropagation(); const source = draggedEntry, target = folder(); draggedEntry = '';
     if (canMove(source, target)) moveDropped(source, target);
   });
@@ -424,6 +437,11 @@ async function loadTree(path, parent, depth, open = null) {
     row.dataset.path = entry.path;
     if(!entry.directory && state.file?.path.toLowerCase()===entry.path.toLowerCase())row.classList.add('selected');
     if(entry.directory){const disclosure=icon('chevronRight');disclosure.classList.add('folder-glyph');row.append(disclosure,icon('folder'));}else row.append(el('span',`file-glyph ${fileColor(entry.name)}`,fileGlyph(entry.name)));row.append(el('span','tree-name',entry.name)); parent.append(row);
+    row.draggable = true;
+    row.addEventListener('dragstart', event => { draggedEntry = entry.path; event.dataTransfer.setData('text/orbit-file', entry.path); event.dataTransfer.effectAllowed = 'move'; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { draggedEntry = ''; row.classList.remove('dragging'); document.querySelectorAll('.drop-target').forEach(node => node.classList.remove('drop-target')); });
+    if (entry.directory) dropTarget(row, () => entry.path);
+    if (entry.directory && open?.has(entry.path.toLowerCase())) { const nested = el('div','tree-children'); row.after(nested); row.classList.add('expanded'); await loadTree(entry.path, nested, depth + 1, open); }
   }
   if (truncated) parent.append(el('p','tree-hint','처음 1,500개 항목만 표시합니다.'));
 }

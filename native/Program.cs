@@ -151,6 +151,8 @@ namespace Orbit {
                 var request=json.Deserialize<Dictionary<string,object>>(e.WebMessageAsJson);
                 id=N(request,"id");string method=S(request,"method");
                 var a=request.ContainsKey("args")?request["args"] as Dictionary<string,object>:new Dictionary<string,object>();
+                // Files dropped from Windows Explorer arrive as WebView2 file objects next to the message; only they carry paths for dropFiles.
+                if(method=="dropFiles") { var paths=new List<string>();var extra=e.AdditionalObjects;if(extra!=null)foreach(object item in extra){var file=item as CoreWebView2File;if(file!=null&&!String.IsNullOrEmpty(file.Path))paths.Add(file.Path);}a["files"]=paths; }
                 object result=await Dispatch(method,a,null);
                 if(id!=0)Send(new {id=id,result=result});
             }catch(Exception ex) {if(id!=0)Send(new {id=id,error=ex.Message});else Send(new {type="error",message=ex.Message});}
@@ -170,6 +172,7 @@ namespace Orbit {
                 case "createFile":result=await Task.Run(()=>Files.CreateFile(S(a,"path")));break;
                 case "list":result=await Task.Run(()=>Files.List(S(a,"path"),S(a,"hidden")=="True"));break;
                 case "move":result=await Task.Run(()=>Files.Move(S(a,"path"),S(a,"target")));break;
+                case "dropFiles": { if(owner!=null)throw new InvalidOperationException("원격 연결에서는 사용할 수 없습니다.");var dropped=a.ContainsKey("files")?a["files"] as List<string>:null;result=await Task.Run(()=>Files.Import(dropped??new List<string>(),S(a,"target"),S(a,"copy")=="True"));break; }
                 case "read":result=await Task.Run(()=>Files.Read(Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder))));break;
                 case "save":result=await Task.Run(()=>Files.Save(S(a,"path"),S(a,"content"),S(a,"encoding"),S(a,"revision",null)));break;
                 case "stat": {string p=Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder));result=new { path=p,directory=Directory.Exists(p),exists=Directory.Exists(p)||File.Exists(p) };break;}

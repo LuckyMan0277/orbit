@@ -61,6 +61,38 @@ namespace Orbit {
             if(directory) Directory.Move(source,destination); else File.Move(source,destination);
             return new { path=destination };
         }
+        // Files dropped from Windows Explorer into the file tree: moved (or copied) into the folder one by one. An entry that
+        // fails (same name already there, in use, ...) is reported and the rest still go through.
+        public static object Import(IEnumerable<string> paths,string folder,bool copy) {
+            string target=Path.GetFullPath(folder).TrimEnd('\\');
+            if(!Directory.Exists(target)) throw new DirectoryNotFoundException("대상 폴더를 찾을 수 없습니다.");
+            var done=new List<string>();var errors=new List<string>();
+            foreach(string raw in paths) {
+                string source=Path.GetFullPath(raw).TrimEnd('\\'),name=Path.GetFileName(source);
+                try {
+                    bool directory=Directory.Exists(source);
+                    if(!directory && !File.Exists(source)) throw new FileNotFoundException("항목을 찾을 수 없습니다.");
+                    if(!copy && String.Equals(Path.GetDirectoryName(source),target,StringComparison.OrdinalIgnoreCase)) continue;
+                    if(directory && (String.Equals(source,target,StringComparison.OrdinalIgnoreCase) || target.StartsWith(source+"\\",StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("폴더를 자기 안으로 옮길 수 없습니다.");
+                    string destination=Path.Combine(target,name);
+                    if(File.Exists(destination) || Directory.Exists(destination)) throw new IOException("같은 이름의 항목이 이미 있습니다.");
+                    if(!directory) { if(copy)File.Copy(source,destination);else File.Move(source,destination); }
+                    else if(copy) CopyDirectory(source,destination);
+                    else if(String.Equals(Path.GetPathRoot(source),Path.GetPathRoot(target),StringComparison.OrdinalIgnoreCase)) Directory.Move(source,destination);
+                    else { CopyDirectory(source,destination);Directory.Delete(source,true); } // another drive: Directory.Move cannot cross volumes
+                    done.Add(destination);
+                } catch(Exception ex) { errors.Add(name+": "+ex.Message); }
+            }
+            return new { paths=done,errors=errors };
+        }
+        static void CopyDirectory(string source,string destination) {
+            Directory.CreateDirectory(destination);
+            foreach(string file in Directory.GetFiles(source)) File.Copy(file,Path.Combine(destination,Path.GetFileName(file)));
+            foreach(string child in Directory.GetDirectories(source)) {
+                if((File.GetAttributes(child)&FileAttributes.ReparsePoint)!=0) throw new IOException("링크 폴더가 들어 있어 다른 드라이브로 옮길 수 없습니다: "+Path.GetFileName(child));
+                CopyDirectory(child,Path.Combine(destination,Path.GetFileName(child)));
+            }
+        }
         internal static string Hash(byte[] bytes) { using(var sha=SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(bytes)); }
         internal static Encoding Decode(byte[] bytes,out int offset,out string label) {
             offset=0; label="UTF-8";

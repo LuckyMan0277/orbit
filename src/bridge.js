@@ -25,6 +25,16 @@ export async function call(method, args = {}) {
     host.postMessage({ id, method, args });
   });
 }
+// Files dropped from Windows Explorer: WebView2 hands their real paths to the host alongside the message.
+export const canSendFiles = typeof host?.postMessageWithAdditionalObjects === 'function';
+export function callWithFiles(method, args, files) {
+  if (!canSendFiles) return Promise.reject(new Error('이 환경에서는 탐색기에서 파일을 끌어올 수 없습니다.'));
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    waiting.set(id, { resolve, reject });
+    host.postMessageWithAdditionalObjects({ id, method, args }, files);
+  });
+}
 const previewDocs = {
   'README.md': '# Orbit\n\n에이전트 작업을 위한 가벼운 데스크톱 워크스페이스.\n\n## 시작하기\n\n1. 작업 폴더를 선택하세요.\n2. Codex, Claude 또는 터미널을 여세요.\n3. 파일 링크를 클릭해 바로 편집하세요.\n\n> 브라우저에서는 UI 미리보기만 사용할 수 있습니다.\n',
   'AGENTS.md': '# 프로젝트 안내\n\n- 변경 전 관련 파일을 읽으세요.\n- 작은 단위로 수정하고 테스트하세요.\n- 작업 결과를 한국어로 요약하세요.\n',
