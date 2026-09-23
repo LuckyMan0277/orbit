@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composePackets, composeStageKey, epochChanged, sendComposerPackets } from '../src/remote-input.js';
+import { attachmentText, composePackets, composeStageKey, epochChanged, sendComposerPackets } from '../src/remote-input.js';
 
 test('send action sends paste body before a distinct submit Enter', () => {
   assert.deepEqual(composePackets('review\r\nthis', true, true), ['\u001b[200~review\rthis\u001b[201~', '\r']);
@@ -40,4 +40,10 @@ test('a soft reconnect keeps the last epoch so a new server invalidates its stag
   const lastKnownEpoch = 'epoch-before-disconnect'; // soft disconnect retains this value
   assert.equal(epochChanged(lastKnownEpoch, 'epoch-after-reconnect'), true);
   assert.equal(epochChanged(lastKnownEpoch, lastKnownEpoch), false);
+});
+
+test('attached file paths are appended to the draft, quoted when they contain spaces', () => {
+  assert.equal(attachmentText('', ['C:\\p\\.orbit\\uploads\\a.jpg']), 'C:\\p\\.orbit\\uploads\\a.jpg ');
+  assert.equal(attachmentText('look at', ['C:\\My Project\\b.png', 'C:\\p\\c.pdf']), 'look at "C:\\My Project\\b.png" C:\\p\\c.pdf ');
+  assert.equal(attachmentText('look at ', ['C:\\p\\a.jpg']), 'look at C:\\p\\a.jpg ');
 });

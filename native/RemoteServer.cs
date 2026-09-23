@@ -10,10 +10,12 @@ using System.Threading;
 using System.Web.Script.Serialization;
 namespace Orbit {
  internal interface IRemoteTerminals { object Sessions(); object SavedSessions(); object DeleteSavedSession(string provider,string id); object Snapshot(string id); object Output(string id,long after,int timeoutMs); object Create(string profile,string resumeId,string project=null); object Projects(); void Input(string id,string data); }
+ // Implemented by the host: the working folder of a running session, where files sent from the phone are saved.
+ internal interface IRemoteUploads { string UploadFolder(string session); }
  internal sealed class RemoteServer:IDisposable {
   HttpListener listener=new HttpListener(); readonly IRemoteTerminals terminals; readonly JavaScriptSerializer json=new JavaScriptSerializer {MaxJsonLength=2*1024*1024};
   readonly ConcurrentDictionary<string,Device> devices=new ConcurrentDictionary<string,Device>(); readonly ConcurrentDictionary<string,Rate> rates=new ConcurrentDictionary<string,Rate>(); readonly ConcurrentDictionary<string,Receipt> receipts=new ConcurrentDictionary<string,Receipt>(); readonly string serverEpoch=Guid.NewGuid().ToString("N");
-  readonly string deviceFile; readonly object lifecycle=new object(),persistence=new object(); bool running; int active; long rateSweepTicks; const int MaxBody=65536,DeskMaxBody=1900000,MaxClients=12;
+  readonly string deviceFile; readonly object lifecycle=new object(),persistence=new object(); bool running; int active; long rateSweepTicks; const int MaxBody=65536,DeskMaxBody=1900000,MaxClients=12;public const long MaxUpload=30L*1024*1024;
   sealed class Device {public string Hash,Name;public DateTime Added;}
   sealed class Rate {public DateTime Window=DateTime.UtcNow;public int Count;}
   sealed class Receipt {public string Session,Payload;public DateTime Expires;public volatile int State;}
@@ -61,6 +63,7 @@ namespace Orbit {
    Dictionary<string,object>a;Device device;
    // Desktop-bridge bodies may carry file contents, so authenticate before accepting the larger body.
    if(desk){device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}a=Parse(Body(c,DeskMaxBody));}
+   else if(op=="upload"){device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}if(!RateOk("device:"+device.Hash,900)){Reply(c,429,new {error="rate limited"});return;}Upload(c);return;}
    else{a=Parse(Body(c));if(op=="login"){LoginRoute(c,a);return;}device=Auth(c);if(device==null){Reply(c,401,new {error="unauthorized"});return;}}
    if(!RateOk("device:"+device.Hash,desk?6000:900)){Reply(c,429,new {error="rate limited"});return;}
    if(desk){DeskRoute(c,a,op,device);return;}
@@ -86,6 +89,31 @@ namespace Orbit {
     Reply(c,200,op=="secrets/set"?vault.SetSecret(S(a,"name"),S(a,"value"),S(a,"scope"),project):vault.DeleteSecret(S(a,"name"),S(a,"scope"),project));
    }catch(InvalidOperationException ex){Reply(c,400,new {error=Safe(ex.Message)});}
    catch(IOException){Reply(c,500,new {error="storage failed"});}
+  }
+  // A file or photo from the phone, sent as the raw request body. It lands in the session's folder under .orbit/uploads (ignored by git)
+  // and the reply carries the full path, which the phone puts into the composer for the AI to read.
+  void Upload(HttpListenerContext c){
+   var target=terminals as IRemoteUploads;if(target==null){Reply(c,404,new {error="unknown api"});return;}
+   long length=c.Request.ContentLength64;if(length==0||length>MaxUpload){Reply(c,413,new {error="파일은 30MB까지 보낼 수 있습니다."});return;}
+   string name;try{name=Uri.UnescapeDataString(c.Request.Headers["X-Orbit-Name"]??"");}catch(UriFormatException){name="";}
+   string cwd=target.UploadFolder(c.Request.Headers["X-Orbit-Session"]??"");
+   string folder=Path.Combine(cwd,".orbit","uploads");Directory.CreateDirectory(folder);
+   string ignore=Path.Combine(folder,".gitignore");if(!File.Exists(ignore))try{File.WriteAllText(ignore,"*\n");}catch{}
+   string stem=DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-",clean=UploadName(name),file=Path.Combine(folder,stem+clean);
+   for(int i=2;File.Exists(file);i++)file=Path.Combine(folder,stem+Path.GetFileNameWithoutExtension(clean)+"-"+i+Path.GetExtension(clean));
+   long written=0;
+   try{
+    using(var output=new FileStream(file,FileMode.CreateNew,FileAccess.Write)){byte[] buffer=new byte[81920];int n;while((n=c.Request.InputStream.Read(buffer,0,buffer.Length))>0){written+=n;if(written>MaxUpload)throw new InvalidOperationException("파일은 30MB까지 보낼 수 있습니다.");output.Write(buffer,0,n);}}
+    if(written==0)throw new InvalidOperationException("빈 파일은 보낼 수 없습니다.");
+   }catch{try{File.Delete(file);}catch{}throw;}
+   Reply(c,200,new {path=file,name=Path.GetFileName(file),size=written});
+  }
+  internal static string UploadName(string value){
+   string name=(value??"").Replace('\\','/');name=name.Substring(name.LastIndexOf('/')+1);
+   var b=new StringBuilder();foreach(char ch in name)b.Append(ch<32||Path.GetInvalidFileNameChars().Contains(ch)?'_':ch);
+   name=b.ToString().Trim().Trim('.').Trim();if(name.Length==0)name="file";
+   string ext=Path.GetExtension(name);if(ext.Length>16)ext="";string stem=name.Substring(0,name.Length-Path.GetExtension(name).Length);if(stem.Length==0)stem="file";if(stem.Length>60)stem=stem.Substring(0,60).Trim();
+   return stem+ext;
   }
   static string[] Names(Dictionary<string,object> a,string key){object v;var list=a!=null&&a.TryGetValue(key,out v)?v as System.Collections.IEnumerable:null;return list==null||list is string?new string[0]:list.Cast<object>().Select(x=>Convert.ToString(x)).Where(x=>!String.IsNullOrEmpty(x)&&x.Length<=64).Take(SecretVault.MaxPerTerminal+1).ToArray();}
   void LoginRoute(HttpListenerContext c,Dictionary<string,object> a){

@@ -20,3 +20,9 @@ export async function sendComposerPackets(stage, packets, submit, send) {
   if (!stage.bodySent) stage.bodySent = await send(packets[0]);
   return stage.bodySent && (!submit || await send(packets[1]));
 }
+
+// Paths of files sent from the phone, appended to the composer text. Paths with spaces are quoted so the AI reads them as one path.
+export function attachmentText(current, paths) {
+  const text = paths.map(path => /\s/.test(path) ? `"${path}"` : path).join(' ');
+  return `${current}${current && !/\s$/.test(current) ? ' ' : ''}${text} `;
+}

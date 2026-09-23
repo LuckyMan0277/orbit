@@ -105,6 +105,7 @@ button:disabled{opacity:.45}
 .command-row{display:flex;gap:8px;align-items:flex-end}
 .command-row textarea{flex:1;min-width:0;min-height:var(--tap);max-height:132px;margin:0;padding:11px 14px;border:1px solid var(--line);border-radius:14px;background:var(--output);color:var(--text);font-size:16px;line-height:1.35;resize:none}
 #send{flex:none;min-width:80px;min-height:var(--tap);border-radius:14px}
+.attach{flex:none;display:grid;place-items:center;width:var(--tap);min-height:var(--tap);padding:0;border-radius:14px}
 .keys{display:flex;gap:8px;overflow-x:auto;padding:8px 32px 0 0;scrollbar-width:none;-webkit-overflow-scrolling:touch;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}
 .keys::-webkit-scrollbar{display:none}
 .keys button{flex:0 0 auto;min-width:48px;min-height:40px;padding:0 14px;font-size:14px}
@@ -153,7 +154,7 @@ button:disabled{opacity:.45}
   .composer-status{display:none}
   .command-row{flex:1;min-width:0}
   .command-row textarea{min-height:40px}
-  #send{min-height:40px}
+  #send,.attach{min-height:40px}
   .keys{flex:none;max-width:48%;padding-top:0;-webkit-mask-image:none;mask-image:none;padding-right:0}
   .keys button{min-height:40px}
   .menu-panel{max-height:62%}

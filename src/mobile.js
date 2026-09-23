@@ -2,7 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import './mobile.css';
 import { conversationDetails } from './remote-readable.js';
-import { composePackets, composeStageKey, epochChanged, sendComposerPackets } from './remote-input.js';
+import { attachmentText, composePackets, composeStageKey, epochChanged, sendComposerPackets } from './remote-input.js';
 import { remainingDeadlineMs } from './remote-connection.js';
 import { commonSecretNames, secretNameProblem, suggestSecretName } from './secret-hints.js';
 import { sessionStatus, groupByProject } from './session-status.js';
@@ -26,7 +26,7 @@ let secretKeys = [], secretNamed = false, shownRequest = '', shownRequestName = 
 let run = 0, pollAbort = null, reconnecting = false, available = true, retryTimer = 0, connectionOpen = false;
 let view = stored('orbit.remote.view') || 'readable';
 let themeChoice = stored('orbit.remote.theme') || 'system';
-let toastTimer = 0, inputTail = Promise.resolve(), composerBusy = false, renderTimer = 0, forceReadableFollow = false, composeGeneration = 0;
+let toastTimer = 0, inputTail = Promise.resolve(), composerBusy = false, uploading = false, renderTimer = 0, forceReadableFollow = false, composeGeneration = 0;
 const drafts = new Map();
 const uncertain = new Map();
 const composeStages = new Map();
@@ -81,14 +81,14 @@ function saveDraft() { if (session) drafts.set(session, $('#input').value); }
 function restoreDraft() { $('#input').value = drafts.get(session) || ''; }
 function controls() {
   const okay = available && !!session && readySession === session && !composerBusy;
-  $('#send').disabled = !okay; $('#input-only').disabled = !okay; $('#stop').disabled = !okay;
+  $('#send').disabled = !okay; $('#input-only').disabled = !okay; $('#stop').disabled = !okay; $('#attach').disabled = !okay || uploading;
   document.querySelectorAll('[data-key]').forEach(button => { button.disabled = !okay; });
   document.querySelectorAll('[data-create]').forEach(button => { button.disabled = !available; });
   const status = $('#conversation-status'), composer = $('#composer-status');
   const busy = !!session && readySession !== session;
   status.dataset.state = available ? (busy ? 'busy' : 'ready') : 'offline';
   status.textContent = available ? (busy ? '세션 불러오는 중' : '연결됨') : '연결 끊김';
-  composer.textContent = !session ? '세션을 선택하세요' : !available ? '연결을 복구하는 중' : busy ? '세션 준비 중' : composerBusy ? '전송 확인 중' : '입력 준비됨';
+  composer.textContent = !session ? '세션을 선택하세요' : !available ? '연결을 복구하는 중' : busy ? '세션 준비 중' : uploading ? '파일 보내는 중' : composerBusy ? '전송 확인 중' : '입력 준비됨';
 }
 function sessionName(item) { return item.name || item.title || profiles[item.profile] || '터미널'; }
 function truncateName(text, max = 22) { const value = String(text || ''); return value.length > max ? `${value.slice(0, max - 3).trimEnd()}...` : value; }
@@ -392,6 +392,58 @@ async function compose(submit) {
   }
   finally { composerBusy = false; controls(); saveDraft(); }
 }
+// ---- Attachments. A file or photo goes to the PC first (into the session's folder, .orbit/uploads); its full path is then added to the
+// composer, so Claude or Codex opens it when the message is sent.
+const maxUpload = 30 * 1024 * 1024;
+// Phone photos are large, and iPhones may hand over HEIC, which the AIs cannot read: send big or HEIC photos as a JPEG of at most 2048px.
+async function prepareUpload(file) {
+  const heic = /^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+  if (!heic && (!/^image\/(jpeg|png|webp)$/i.test(file.type) || file.size <= 1.5 * 1024 * 1024)) return { blob:file, name:file.name };
+  try {
+    const bitmap = await createImageBitmap(file), scale = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas'); canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close?.();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.86));
+    if (!blob || (!heic && blob.size >= file.size)) return { blob:file, name:file.name };
+    return { blob, name:`${(file.name || 'photo').replace(/\.[^.]*$/, '') || 'photo'}.jpg` };
+  } catch { return { blob:file, name:file.name }; }
+}
+async function uploadFile(file, id, access) {
+  const { blob, name } = await prepareUpload(file);
+  if (blob.size > maxUpload) throw apiError(`${name}: 파일은 30MB까지 보낼 수 있습니다.`);
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 300000);
+  try {
+    const response = await fetch('/api/v1/upload', { method:'POST', cache:'no-store', signal:controller.signal, headers:{ 'content-type':'application/octet-stream', authorization:`Bearer ${access}`, 'x-orbit-session':id, 'x-orbit-name':encodeURIComponent(name || 'file') }, body:blob });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok || !value.path) {
+      if (response.status === 401 && access === token) forget('PC에서 이 브라우저 등록을 해제했거나 권한이 만료되었습니다.');
+      throw apiError(value.error || `파일을 보내지 못했습니다. (HTTP ${response.status})`, response.status);
+    }
+    return value.path;
+  } catch (failure) { if (failure.name === 'AbortError') throw apiError('파일 전송 시간이 초과되었습니다.'); throw failure; }
+  finally { clearTimeout(timer); }
+}
+async function attachFiles(files) {
+  const list = Array.from(files || []);
+  if (!list.length || uploading || !available || !token || !session || readySession !== session) return;
+  const id = session, access = token, paths = [];
+  uploading = true; controls();
+  try {
+    for (const [index, file] of list.entries()) {
+      if (list.length > 1) $('#composer-status').textContent = `파일 보내는 중 (${index + 1}/${list.length})`;
+      paths.push(await uploadFile(file, id, access));
+      if (access !== token) return;
+    }
+  } catch (failure) { toast(failure.message || '파일을 보내지 못했습니다.'); }
+  finally {
+    uploading = false;
+    if (paths.length && access === token) {
+      if (session === id) { $('#input').value = attachmentText($('#input').value, paths); saveDraft(); } else drafts.set(id, attachmentText(drafts.get(id) || '', paths));
+      toast(paths.length === 1 ? '파일을 첨부했습니다. 메시지와 함께 보내세요.' : `${paths.length}개 파일을 첨부했습니다. 메시지와 함께 보내세요.`);
+    }
+    controls();
+  }
+}
 function parseLoginToken(value) {
   // The QR carries the token as ?login= (in-app browsers and some scanners drop or encode a #fragment); links from the
   // account login page still use #login=.
@@ -420,6 +472,7 @@ term.open($('#raw-output'));
   $('.composer-wrap').addEventListener('mousedown', event => { if (event.target.closest('button')) event.preventDefault(); });
 }
 applyTheme(); setView(view); updateViewport();
+$('#attach').onclick = () => $('#attach-input').click(); $('#attach-input').onchange = event => { const files = Array.from(event.target.files || []); event.target.value = ''; attachFiles(files); };
 $('#send').onclick = () => compose(true); $('#input-only').onclick = () => compose(false); $('#stop').onclick = () => sendInput(session, specialKeys['ctrl-c']); $('#view-toggle').onclick = () => setView(view === 'readable' ? 'raw' : 'readable');
 $('#latest').onclick = () => { $('#readable-output').scrollTop = $('#readable-output').scrollHeight; $('#latest').hidden = true; }; $('#session-select').onchange = event => { selectSession(event.target.value); closeMenu(); }; $('#refresh').onclick = showWorkspace; $('#resume').onclick = showWorkspace; $('#logout').onclick = () => disconnect(); $('#input').oninput = saveDraft;
 $('#input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); compose(true); } };

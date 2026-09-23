@@ -77,6 +77,17 @@ namespace Orbit {
                     if(!routed.StartsWith("HTTP/1.1 200",StringComparison.Ordinal))throw new Exception("authenticated POST body was not routed through loopback proxy: "+routed);
                     if(Raw(proxy.Port,"POST /api/v1/sessions HTTP/1.1\r\nHost: public-orbit.example\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}").Length!=0)throw new Exception("duplicate Content-Length was accepted");
                     if(Raw(proxy.Port,"POST /api/v1/sessions HTTP/1.1\r\nHost: public-orbit.example\r\nTransfer-Encoding: chunked\r\n\r\n").Length!=0)throw new Exception("chunked request was accepted");
+                    // A phone upload larger than the proxy's normal body limit is streamed through and saved, git-ignored, in the session folder.
+                    terminals.Folder=Path.Combine(dir,"upload project");Directory.CreateDirectory(terminals.Folder);
+                    Func<string,string,string,string> upload=(path,auth,data)=>Raw(proxy.Port,"POST "+path+" HTTP/1.1\r\nHost: public-orbit.example\r\nAuthorization: Bearer "+auth+"\r\nContent-Type: application/octet-stream\r\nX-Orbit-Session: s1\r\nX-Orbit-Name: "+Uri.EscapeDataString("..\\사진 1.jpg")+"\r\nContent-Length: "+data.Length+"\r\n\r\n"+data);
+                    string payload=new string('x',200000),uploaded=upload("/api/v1/upload",token,payload);
+                    if(!uploaded.StartsWith("HTTP/1.1 200",StringComparison.Ordinal))throw new Exception("upload was not accepted: "+uploaded.Substring(0,Math.Min(300,uploaded.Length)));
+                    string saved=Directory.GetFiles(Path.Combine(terminals.Folder,".orbit","uploads"),"*사진 1.jpg")[0];
+                    if(File.ReadAllText(saved)!=payload)throw new Exception("uploaded file content differs");
+                    if(File.ReadAllText(Path.Combine(terminals.Folder,".orbit","uploads",".gitignore"))!="*\n")throw new Exception("upload folder is not git-ignored");
+                    if(!upload("/api/v1/upload","wrong","small").StartsWith("HTTP/1.1 401",StringComparison.Ordinal))throw new Exception("unauthenticated upload was accepted");
+                    terminals.Folder=null;if(!upload("/api/v1/upload",token,"small").StartsWith("HTTP/1.1 400",StringComparison.Ordinal))throw new Exception("upload to an unknown session was accepted");
+                    if(upload("/api/v1/sessions",token,payload).Length!=0)throw new Exception("large body was accepted outside upload");
                 }
             });
             test("picker directory navigation and exclusive file creation",()=> {
@@ -276,6 +287,6 @@ namespace Orbit {
             public object PendingSecretRequests(string session){return new[]{new {id="req-1",name="ASKED_KEY",reason="why"}};}
             public bool AnswerSecretRequest(string request,string status){LastAnswer=request+":"+status;return true;}
         }
-        class TestTerminals:IRemoteTerminals {public object Sessions(){return new {sessions=new object[0]};}public object SavedSessions(){return new {sessions=new object[0]};}public object DeleteSavedSession(string provider,string id){return new {sessions=new object[0]};}public object Snapshot(string id){return new { };}public object Output(string id,long after,int timeout){return new { };}public object Create(string profile,string resumeId,string project=null){return new {session="test"};}public object Projects(){return new {projects=new object[0],current=""};}public void Input(string id,string data){}}
+        class TestTerminals:IRemoteTerminals,IRemoteUploads {public string Folder;public string UploadFolder(string id){if(id!="s1"||Folder==null)throw new InvalidOperationException("terminal not found");return Folder;}public object Sessions(){return new {sessions=new object[0]};}public object SavedSessions(){return new {sessions=new object[0]};}public object DeleteSavedSession(string provider,string id){return new {sessions=new object[0]};}public object Snapshot(string id){return new { };}public object Output(string id,long after,int timeout){return new { };}public object Create(string profile,string resumeId,string project=null){return new {session="test"};}public object Projects(){return new {projects=new object[0],current=""};}public void Input(string id,string data){}}
     }
 }

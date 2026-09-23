@@ -24,7 +24,7 @@ namespace Orbit {
             Application.Run(new MainWindow(args));return Environment.ExitCode;
         }
     }
-    internal sealed partial class MainWindow : Form, IRemoteTerminals, IRemoteSecrets, IDeskBridge {
+    internal sealed partial class MainWindow : Form, IRemoteTerminals, IRemoteSecrets, IRemoteUploads, IDeskBridge {
         private readonly WebView2 web=new WebView2();
         private readonly WindowChrome chrome;
         private CoreWebView2Environment environment;
@@ -336,6 +336,7 @@ namespace Orbit {
         }
         object IRemoteTerminals.Snapshot(string id) { if(!sessions.ContainsKey(id))throw new InvalidOperationException("terminal not found");if(sessionOwners.ContainsKey(id)) { OutputRing replayRing;if(!outputRings.TryGetValue(id,out replayRing))throw new InvalidOperationException("terminal not found");long replaySeq;string replay=replayRing.Replay(out replaySeq);int[] size;if(!sessionSizes.TryGetValue(id,out size))size=new[]{100,30};return new {seq=replaySeq,data=replay,cols=size[0],rows=size[1],items=new object[0]}; } string key=id+":"+Interlocked.Increment(ref nextSnapshotId);var request=new RemoteSnapshot();if(!remoteSnapshots.TryAdd(key,request))throw new InvalidOperationException("snapshot busy");try {Send(new {type="remoteSnapshot",session=id,request=key});if(request.Ready.WaitOne(3000))return new {seq=request.Seq,data=request.Data,cols=request.Cols,rows=request.Rows,items=new object[0]};throw new TimeoutException("snapshot timed out");}finally{RemoteSnapshot ignored;remoteSnapshots.TryRemove(key,out ignored);request.Ready.Dispose();} }
         object IRemoteTerminals.Output(string id,long after,int timeoutMs) { if(!sessions.ContainsKey(id))throw new InvalidOperationException("terminal not found");OutputRing r;if(!outputRings.TryGetValue(id,out r))throw new InvalidOperationException("terminal not found");return r.After(after,timeoutMs); }
+        string IRemoteUploads.UploadFolder(string id) { string cwd;if(String.IsNullOrEmpty(id)||!sessions.ContainsKey(id)||!sessionProjects.TryGetValue(id,out cwd)||String.IsNullOrEmpty(cwd)||!Directory.Exists(cwd))throw new InvalidOperationException("terminal not found");return cwd; }
         object IRemoteTerminals.Create(string profile,string resumeId,string project) { return ((IRemoteSecrets)this).Create(profile,resumeId,project,null); }
         // keys: what this project can use, each tagged "global" (all projects) or "project"; names: the same without the tags.
         object IRemoteSecrets.SecretNames(string project) { return new {names=vault.Names(project),keys=vault.List(project)}; }
