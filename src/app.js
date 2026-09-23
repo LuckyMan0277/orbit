@@ -382,8 +382,37 @@ async function pickHomeProject() {
   const path = await chooseLocal('folder');
   if (path) addRecentProject(path);
 }
-async function refreshTree() { $('#file-filter').value = ''; const root = $('#file-tree'); root.replaceChildren(el('p','tree-hint','불러오는 중…')); await loadTree(state.folder, root, 0); }
-async function loadTree(path, parent, depth) {
+// Folders that were open stay open after a refresh (e.g. after moving a file).
+async function refreshTree() { $('#file-filter').value = ''; const root = $('#file-tree'), open = new Set([...root.querySelectorAll('.tree-row.expanded')].map(row => row.dataset.path.toLowerCase())); root.replaceChildren(el('p','tree-hint','불러오는 중…')); await loadTree(state.folder, root, 0, open); }
+// ---- Drag and drop in the file tree: drop a file or folder on a folder row to move it there, or on the empty area to move it to the project root.
+const pathSep = path => path.includes('\\') ? '\\' : '/';
+const parentOf = path => path.slice(0, Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/')));
+const within = (path, folder) => path.toLowerCase() === folder.toLowerCase() || path.toLowerCase().startsWith(folder.toLowerCase() + pathSep(folder));
+let draggedEntry = '';
+const canMove = (source, folder) => !!source && !!folder && !within(folder, source) && parentOf(source).toLowerCase() !== folder.toLowerCase();
+async function moveEntry(source, folder) {
+  const { path } = await call('move', { path: source, target: folder });
+  // Open editor tabs follow the file (or the files inside a moved folder).
+    row.draggable = true;
+    row.addEventListener('dragstart', event => { draggedEntry = entry.path; event.dataTransfer.setData('text/orbit-file', entry.path); event.dataTransfer.effectAllowed = 'move'; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { draggedEntry = ''; row.classList.remove('dragging'); document.querySelectorAll('.drop-target').forEach(node => node.classList.remove('drop-target')); });
+    if (entry.directory) dropTarget(row, () => entry.path);
+    if (entry.directory && open?.has(entry.path.toLowerCase())) { const nested = el('div','tree-children'); row.after(nested); row.classList.add('expanded'); await loadTree(entry.path, nested, depth + 1, open); }
+  for (const file of state.files) if (within(file.path, source)) file.path = path + file.path.slice(source.length);
+  renderFileTabs(); await refreshTree(); toast(`${path.split(/[\\/]/).at(-1)} 을(를) 옮겼습니다.`);
+}
+const moveDropped = guard(moveEntry);
+function dropTarget(node, folder) {
+  node.addEventListener('dragover', event => { if (!event.dataTransfer.types.includes('text/orbit-file') || !canMove(draggedEntry, folder())) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; node.classList.add('drop-target'); });
+  node.addEventListener('dragleave', event => { if (!node.contains(event.relatedTarget)) node.classList.remove('drop-target'); });
+  node.addEventListener('drop', event => {
+    node.classList.remove('drop-target'); if (!event.dataTransfer.types.includes('text/orbit-file')) return;
+    event.preventDefault(); event.stopPropagation(); const source = draggedEntry, target = folder(); draggedEntry = '';
+    if (canMove(source, target)) moveDropped(source, target);
+  });
+}
+dropTarget($('#file-tree'), () => state.folder);
+async function loadTree(path, parent, depth, open = null) {
   const { entries, truncated } = await call('list', { path, hidden: state.hidden }); parent.replaceChildren();
   if (!entries.length) parent.append(el('p','tree-hint','비어 있는 폴더'));
   for (const entry of entries) {

@@ -90,6 +90,19 @@ namespace Orbit {
                     if(upload("/api/v1/sessions",token,payload).Length!=0)throw new Exception("large body was accepted outside upload");
                 }
             });
+            test("file tree move keeps entries and refuses unsafe targets",()=> {
+                string root=Path.Combine(dir,"move tree"),docs=Path.Combine(root,"docs"),sub=Path.Combine(docs,"sub");
+                Directory.CreateDirectory(sub);File.WriteAllText(Path.Combine(root,"a.txt"),"a");File.WriteAllText(Path.Combine(docs,"a.txt"),"other");File.WriteAllText(Path.Combine(root,"b.txt"),"b");
+                bool refused;
+                try{Files.Move(Path.Combine(root,"a.txt"),docs);refused=false;}catch(IOException){refused=true;}
+                if(!refused||File.ReadAllText(Path.Combine(docs,"a.txt"))!="other")throw new Exception("move overwrote an existing file");
+                try{Files.Move(docs,sub);refused=false;}catch(InvalidOperationException){refused=true;}
+                if(!refused)throw new Exception("folder was moved into itself");
+                Files.Move(Path.Combine(root,"b.txt"),sub);
+                if(File.Exists(Path.Combine(root,"b.txt"))||File.ReadAllText(Path.Combine(sub,"b.txt"))!="b")throw new Exception("file was not moved");
+                Files.Move(sub,root);
+                if(Directory.Exists(sub)||!File.Exists(Path.Combine(root,"sub","b.txt")))throw new Exception("folder was not moved");
+            });
             test("picker directory navigation and exclusive file creation",()=> {
                 string folder=Path.Combine(dir,"선택 폴더");
                 string child=Path.Combine(folder,"하위 폴더");

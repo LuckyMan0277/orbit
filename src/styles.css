@@ -138,3 +138,6 @@ dialog:has(.remote-host){width:340px;max-width:calc(100vw - 32px);padding:23px 2
 .topbar .external-connection svg,.topbar .command-trigger svg,.topbar .toolbar-actions svg{width:16px;height:16px}
 .topbar .toolbar-actions{gap:8px}
 [data-platform=mac] .window-controls{display:none}
+/* File tree drag and drop: the folder under the pointer (or the whole tree for the project root) is outlined. */
+.tree-row.dragging{opacity:.45}
+.tree-row.drop-target,#file-tree.drop-target{background:color-mix(in srgb,var(--accent) 18%,transparent);box-shadow:inset 0 0 0 1px var(--accent)}

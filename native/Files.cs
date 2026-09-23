@@ -48,6 +48,19 @@ namespace Orbit {
             using(var stream=new FileStream(full,FileMode.CreateNew,FileAccess.Write,FileShare.None)) { }
             return new { path=full };
         }
+        // Drag and drop in the file tree: moves a file or folder into another folder, never over an existing entry.
+        public static object Move(string path,string folder) {
+            string source=Path.GetFullPath(path).TrimEnd('\\'),target=Path.GetFullPath(folder).TrimEnd('\\');
+            bool directory=Directory.Exists(source);
+            if(!directory && !File.Exists(source)) throw new FileNotFoundException("옮길 항목을 찾을 수 없습니다.");
+            if(!Directory.Exists(target)) throw new DirectoryNotFoundException("대상 폴더를 찾을 수 없습니다.");
+            if(String.Equals(Path.GetDirectoryName(source),target,StringComparison.OrdinalIgnoreCase)) return new { path=source };
+            if(directory && (String.Equals(source,target,StringComparison.OrdinalIgnoreCase) || target.StartsWith(source+"\\",StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("폴더를 자기 안으로 옮길 수 없습니다.");
+            string destination=Path.Combine(target,Path.GetFileName(source));
+            if(File.Exists(destination) || Directory.Exists(destination)) throw new IOException("대상 폴더에 같은 이름의 항목이 있습니다.");
+            if(directory) Directory.Move(source,destination); else File.Move(source,destination);
+            return new { path=destination };
+        }
         internal static string Hash(byte[] bytes) { using(var sha=SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(bytes)); }
         internal static Encoding Decode(byte[] bytes,out int offset,out string label) {
             offset=0; label="UTF-8";

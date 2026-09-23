@@ -30,7 +30,7 @@ namespace Orbit {
         // Deliberately the same surface the desktop UI needs for its workspace; account, update, window and
         // remote-connection settings of this PC are not reachable from a remote client.
         static readonly HashSet<string> DeskAllowed=new HashSet<string> {
-            "list","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","ack","resize",
+            "list","move","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","ack","resize",
             "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal",
             "secretList","secretSet","secretDelete","secretAnswer" };
         readonly ConcurrentDictionary<string,DeskClient> deskClients=new ConcurrentDictionary<string,DeskClient>();
@@ -137,7 +137,7 @@ namespace Orbit {
 
         // ---------------------------------------------------------------- client side
         static readonly HashSet<string> DeskForward=new HashSet<string> {
-            "list","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","resize",
+            "list","move","read","save","stat","createFile","browse","pickerPlaces","createTerminal","write","resize",
             "closeTerminal","terminalName","savedSessions","deleteSavedSession","metrics","hostSessions","attachTerminal","detachTerminal",
             "secretList","secretSet","secretDelete","secretAnswer" };
         // Terminal input must reach the host in the order it was typed; file calls may overlap.

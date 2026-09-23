@@ -169,6 +169,7 @@ namespace Orbit {
                 case "browse":result=await Task.Run(()=>Files.Browse(S(a,"path",initialFolder),S(a,"hidden")=="True",S(a,"directoriesOnly")=="True"));break;
                 case "createFile":result=await Task.Run(()=>Files.CreateFile(S(a,"path")));break;
                 case "list":result=await Task.Run(()=>Files.List(S(a,"path"),S(a,"hidden")=="True"));break;
+                case "move":result=await Task.Run(()=>Files.Move(S(a,"path"),S(a,"target")));break;
                 case "read":result=await Task.Run(()=>Files.Read(Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder))));break;
                 case "save":result=await Task.Run(()=>Files.Save(S(a,"path"),S(a,"content"),S(a,"encoding"),S(a,"revision",null)));break;
                 case "stat": {string p=Files.FullPath(S(a,"path"),S(a,"cwd",initialFolder));result=new { path=p,directory=Directory.Exists(p),exists=Directory.Exists(p)||File.Exists(p) };break;}

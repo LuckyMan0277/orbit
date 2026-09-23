@@ -145,6 +145,31 @@ pub fn create_file(path: &str) -> Result<Value, String> {
     Ok(json!({ "path": text(&full) }))
 }
 
+/// Drag and drop in the file tree: moves a file or folder into another folder, never over an existing entry.
+pub fn move_into(path: &str, folder: &str) -> Result<Value, String> {
+    let source = normalize(Path::new(path));
+    let target = normalize(Path::new(folder));
+    if !source.exists() {
+        return Err("옮길 항목을 찾을 수 없습니다.".to_string());
+    }
+    if !target.is_dir() {
+        return Err("대상 폴더를 찾을 수 없습니다.".to_string());
+    }
+    if source.parent() == Some(target.as_path()) {
+        return Ok(json!({ "path": text(&source) }));
+    }
+    if source.is_dir() && target.starts_with(&source) {
+        return Err("폴더를 자기 안으로 옮길 수 없습니다.".to_string());
+    }
+    let name = source.file_name().ok_or("옮길 항목을 찾을 수 없습니다.")?;
+    let destination = target.join(name);
+    if destination.symlink_metadata().is_ok() {
+        return Err("대상 폴더에 같은 이름의 항목이 있습니다.".to_string());
+    }
+    fs::rename(&source, &destination).map_err(io_msg)?;
+    Ok(json!({ "path": text(&destination) }))
+}
+
 fn hash(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(Sha256::digest(bytes))
 }

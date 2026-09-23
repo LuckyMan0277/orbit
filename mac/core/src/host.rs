@@ -86,6 +86,7 @@ impl Host {
             "browse" => files::browse(&text_or(args, "path", &self.home), flag(args, "hidden"), flag(args, "directoriesOnly")),
             "createFile" => files::create_file(&text(args, "path")),
             "list" => files::list(&text(args, "path"), flag(args, "hidden")),
+            "move" => files::move_into(&text(args, "path"), &text(args, "target")),
             "read" => files::read(&files::full_path(&text(args, "path"), &cwd)),
             "save" => {
                 let revision = match args.get("revision") {
