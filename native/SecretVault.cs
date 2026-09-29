@@ -63,6 +63,22 @@ namespace Orbit {
     return true;
    }
   }
+  // A project folder was renamed or moved: its keys (and those of projects inside it) follow it.
+  public bool MoveProject(string from,string to){
+   string oldKey=NormalizeProject(from),newKey=NormalizeProject(to);
+   if(oldKey==null||newKey==null||oldKey==newKey)return false;
+   lock(gate){
+    Load();var moved=projects.Keys.Where(k=>k==oldKey||k.StartsWith(oldKey+"\\",StringComparison.Ordinal)).ToList();
+    if(moved.Count==0)return false;
+    var before=new Dictionary<string,Dictionary<string,string>>(projects,StringComparer.OrdinalIgnoreCase);
+    foreach(string key in moved){
+     string target=newKey+key.Substring(oldKey.Length);var map=projects[key];projects.Remove(key);
+     Dictionary<string,string> existing;if(projects.TryGetValue(target,out existing)){var merged=new Dictionary<string,string>(existing,StringComparer.OrdinalIgnoreCase);foreach(var pair in map)if(!merged.ContainsKey(pair.Key))merged[pair.Key]=pair.Value;projects[target]=merged;}else projects[target]=map;
+    }
+    if(!Save()){projects=before;throw new IOException("비밀 값을 저장하지 못했습니다.");}
+    return true;
+   }
+  }
   // Name -> value for a terminal working in this folder. names == null means everything it may see; an unknown name fails loudly,
   // because a terminal silently missing its key is worse than none.
   public Dictionary<string,string> Env(string project,IEnumerable<string> names){

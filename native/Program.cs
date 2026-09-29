@@ -72,7 +72,10 @@ namespace Orbit {
             account=new RemoteAccount(remote,Path.Combine(dataRoot,"account.json"));remote.AccountLogin=(email,password)=>account.VerifyLogin(email,password);account.Changed+=delegate { Send(new {type="remoteAccount",account=account.Status()}); };
             tunnel.Changed+=delegate(string url,string error){RefreshRemoteOrigin();if(!String.IsNullOrEmpty(url)&&remoteTestTunnel)try{File.WriteAllText(Path.Combine(TestArtifacts.Root,"remote-test-url.txt"),remote.Url()+"#login="+Uri.EscapeDataString(remote.IssueAccountToken("remote-test-tunnel")));}catch{}Send(new {type="remoteTunnel",tunnel=tunnel.Status(),url=url,error=error});};
             tailscale.Changed+=delegate {RefreshRemoteOrigin();Send(new {type="remoteTailscale",tailscale=tailscale.Status()});};
-            initialFolder=args.FirstOrDefault(x=>Directory.Exists(x)) ?? ((uiTest||remoteTest) ? TestArtifacts.Root : Environment.CurrentDirectory);
+            // Started with Windows: the Run key gives no working folder (System32), so use Orbit's own folder like the Start menu shortcut does, and stay minimized.
+            bool atStartup=args.Contains("--startup");if(atStartup)WindowState=FormWindowState.Minimized;
+            initialFolder=args.FirstOrDefault(x=>Directory.Exists(x)) ?? ((uiTest||remoteTest) ? TestArtifacts.Root : atStartup ? Path.GetDirectoryName(Application.ExecutablePath) : Environment.CurrentDirectory);
+            if(!uiTest&&!remoteTest)Startup.Refresh();
             if(uiTest||remoteTest) Directory.CreateDirectory(initialFolder);
             web.Dock=DockStyle.Fill;web.DefaultBackgroundColor=BackColor;Controls.Add(web);
             Load+=async delegate { await Initialize(); };
@@ -183,6 +186,13 @@ namespace Orbit {
                 case "windowMaximize":chrome.ToggleMaximize();break;
                 case "windowClose":chrome.CloseWindow();break;
                 case "dirty":dirty=S(a,"value")=="True";break;
+                case "resolveProjects": {
+                    object v;var list=a.TryGetValue("items",out v)?v as System.Collections.IEnumerable:null;
+                    var items=(list==null||v is string?new object[0]:list.Cast<object>()).OfType<Dictionary<string,object>>().Take(32).Select(x=>new KeyValuePair<string,string>(S(x,"path"),S(x,"id"))).ToList();
+                    result=new {items=await Task.Run(()=>ProjectLocator.Resolve(items))};break;
+                }
+                case "startup": if(owner!=null)throw new InvalidOperationException("원격 연결에서는 사용할 수 없습니다.");if(a.ContainsKey("enabled")&&!uiTest&&!remoteTest)Startup.Set(S(a,"enabled")=="True");result=new {enabled=Startup.Enabled()};break;
+                case "moveProject": if(owner!=null)throw new InvalidOperationException("원격 연결에서는 사용할 수 없습니다.");vault.MoveProject(S(a,"from"),S(a,"to"));break;
                 case "settings":File.WriteAllText(Path.Combine(dataRoot,"settings.json"),json.Serialize(a));break;
                 case "theme":ApplyHostTheme(S(a,"value"));break;
                 case "savedSessions": {

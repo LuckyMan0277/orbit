@@ -34,6 +34,10 @@ Source: "..\release\Orbit\*"; DestDir: "{app}"; Excludes: "self-test-results.txt
 Name: "{autoprograms}\Orbit"; Filename: "{app}\Orbit.exe"
 Name: "{autodesktop}\Orbit"; Filename: "{app}\Orbit.exe"; Tasks: desktopicon
 
+[Registry]
+; "Start Orbit with Windows" is turned on from Orbit's settings; only make sure uninstalling removes it.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Orbit"; Flags: uninsdeletevalue dontcreatekey
+
 [Run]
 Filename: "{app}\Orbit.exe"; Description: "Launch Orbit"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\Orbit.exe"; Flags: nowait; Check: WizardSilent

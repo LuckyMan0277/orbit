@@ -116,7 +116,7 @@ for (const [name, label, action, shortcut] of [['file','파일 열기',openFileP
 $('#file-filter').addEventListener('input', () => { const query = $('#file-filter').value.toLowerCase(); for (const item of $('#file-tree').querySelectorAll('.tree-file')) item.hidden = !item.dataset.name.includes(query); });
 on('error', data => toast(data.message, true));
 on('remoteCreate', async data => { try { if (!['codex','claude','powershell','cmd'].includes(data.profile)) throw new Error('지원하지 않는 터미널입니다.'); let resume=null;if(data.resumeId){if(!data.cwd||!data.title)throw new Error('저장된 대화 정보가 올바르지 않습니다.');const listed=await call('savedSessions',{cwd:state.folder,allWorkspaces:true}),items=Array.isArray(listed.sessions)?listed.sessions:[];resume=items.find(x=>x.provider===data.profile&&x.id===data.resumeId&&x.cwd===data.cwd);if(!resume)throw new Error('저장된 대화 정보를 다시 확인할 수 없습니다.');const open=state.terminals.find(t=>t.profile===resume.provider&&t.resumeId===resume.id&&!t.pane.exited);if(open){activateTerminal(open.id);open.pane.focus();notify('remoteCreate',{request:data.request,session:open.id});return;}} else if(data.project){if(!visibleProjects().some(path=>matchesProject(path,data.project)))throw new Error('지원하지 않는 프로젝트입니다.');resume={cwd:data.project};} const result=await newTerminal(data.profile,{resumeId:resume?.id,cwd:resume?.cwd,title:resume?.title,secrets:Array.isArray(data.secrets)?data.secrets:undefined}); notify('remoteCreate',{request:data.request,session:result?.session||''}); } catch(e) { if(data.project&&e.message==='작업 폴더를 찾을 수 없습니다.'&&!matchesProject(data.project,state.folder)){state.settings.recent=state.settings.recent.filter(value=>!matchesProject(value,data.project));persist();} notify('remoteCreate',{request:data.request,error:e.message}); } });
-on('remoteProjects', data => { notify('remoteProjects', { request:data.request, projects: visibleProjects().map(path => ({ path, name: projectName(path) })), current: state.folder }); });
+on('remoteProjects', async data => { await syncProjectLocations().catch(() => {}); notify('remoteProjects', { request:data.request, projects: visibleProjects().map(path => ({ path, name: projectName(path) })), current: state.folder }); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Orbit · Agent workspace'; });
 
 async function initialize() {
@@ -128,6 +128,7 @@ async function initialize() {
   // Home constellation without touching the project's folder or its files.
   state.settings.removedProjects = Array.isArray(state.settings.removedProjects) ? state.settings.removedProjects.filter(x => typeof x === 'string').slice(0,16) : [];
   state.settings.projectNames = state.settings.projectNames && typeof state.settings.projectNames === 'object' && !Array.isArray(state.settings.projectNames) ? Object.fromEntries(Object.entries(state.settings.projectNames).filter(([key, value]) => typeof key === 'string' && typeof value === 'string').slice(0, 16)) : {};
+  state.settings.projectIds = state.settings.projectIds && typeof state.settings.projectIds === 'object' && !Array.isArray(state.settings.projectIds) ? Object.fromEntries(Object.entries(state.settings.projectIds).filter(([key, value]) => typeof key === 'string' && typeof value === 'string').slice(0, 16)) : {};
   state.settings.lowPower = state.settings.lowPower !== false;
   state.settings.defaultShell = ['powershell','cmd'].includes(state.settings.defaultShell) ? state.settings.defaultShell : 'powershell';
   state.settings.theme = ['dark', 'light'].includes(state.settings.theme) ? state.settings.theme : 'dark';
@@ -146,6 +147,7 @@ async function initialize() {
   // deliberate Home removal so that folder does not quietly return on reload.
   if (state.settings.removedProjects.some(path => matchesProject(path, state.folder))) state.folder = '';
   renderHomeOrbit();
+  syncProjectLocations();
   updatePower();
   if (!state.client) { showWorkspace(); if (state.folder) focusProject(state.folder); setSidebarMode(state.settings.sidebarMode === 'explorer' ? 'explorer' : 'sessions', false); }
 }
@@ -167,6 +169,59 @@ function showHome() {
   refreshSecretCount();
   app.classList.add('home-active');
   renderHomeOrbit();
+  syncProjectLocations();
+}
+// Projects are remembered by path plus the folder's file ID, so a project folder renamed or moved on the same drive is followed
+// instead of lost. Runs on start, on Home and before opening a project; nothing watches the disk. Returns key(old path) -> {current, found}.
+let locating = null;
+function syncProjectLocations() {
+  if (!isDesktop || state.client) return Promise.resolve({});
+  return locating ||= (async () => {
+    const paths = [state.folder, ...state.settings.recent].filter((path, index, all) => typeof path === 'string' && path && all.findIndex(value => matchesProject(value, path)) === index);
+    const result = paths.length ? await call('resolveProjects', { items: paths.map(path => ({ path, id: state.settings.projectIds[projectKey(path)] || '' })) }).catch(() => null) : null;
+    const found = {};
+    if (!Array.isArray(result?.items)) return found;
+    const ids = {};
+    let changed = false;
+    for (const item of result.items) {
+      found[projectKey(item.path)] = { current: item.current, found: item.found };
+      if (item.moved) { await relocateProject(item.path, item.current, false); changed = true; }
+      if (item.id) ids[projectKey(item.current)] = item.id;
+    }
+    if (JSON.stringify(ids) !== JSON.stringify(state.settings.projectIds)) { state.settings.projectIds = ids; changed = true; }
+    if (changed) { renderHomeOrbit(); persist(); }
+    return found;
+  })().finally(() => { locating = null; });
+}
+// Moves everything Orbit keeps for a project folder to its new path: the Home entry, its display name and its API keys.
+async function relocateProject(from, to, save = true) {
+  const same = value => matchesProject(value, from), fromKey = projectKey(from), toKey = projectKey(to);
+  state.settings.recent = state.settings.recent.map(value => same(value) ? to : value).filter((value, index, all) => all.findIndex(other => matchesProject(other, value)) === index);
+  state.settings.removedProjects = state.settings.removedProjects.filter(value => !matchesProject(value, to));
+  const name = state.settings.projectNames[fromKey];
+  if (name !== undefined) { delete state.settings.projectNames[fromKey]; state.settings.projectNames[toKey] ??= name; }
+  delete state.settings.projectIds[fromKey];
+  await call('moveProject', { from, to }).catch(e => toast(e.message, true));
+  if (same(state.folder)) {
+    state.folder = to; refreshSecretCount();
+    $('#breadcrumb-folder').textContent = basename(to); $('#status-folder').textContent = to; $('#pick-folder').title = to;
+    refreshTree().catch(() => {}); refreshSavedSessions().catch(() => {});
+  }
+  if (save) { renderHomeOrbit(); await persist(); }
+}
+// The project's current folder, following a rename or move; when it cannot be found (e.g. moved to another drive) offers to point at it.
+async function locateProject(path) {
+  const found = (await syncProjectLocations())[projectKey(path)];
+  if (!found || found.found) return found?.current || path;
+  if (!await confirm('프로젝트 폴더를 찾을 수 없음', `“${projectName(path)}” 폴더가 ${path}에 없습니다. 다른 드라이브로 옮겼거나 복사했다면 새 위치를 지정해 주세요.`, '새 위치 지정')) return null;
+  return pickProjectLocation(path);
+}
+async function pickProjectLocation(path) {
+  const to = await chooseLocal('folder');
+  if (!to || matchesProject(to, path)) return null;
+  await relocateProject(path, to);
+  toast(`“${projectName(to)}” 프로젝트 위치를 옮겼습니다.`);
+  return to;
 }
 function showWorkspace() {
   app.classList.remove('home-active');
@@ -334,6 +389,7 @@ function showProjectMenu(path, anchor) {
   const action = (label, run) => { const item = button(label, 'home-project-menu-item', guard(async () => { closeProjectMenu(); await run(); })); item.setAttribute('role', 'menuitem'); menu.append(item); };
   action('작업 공간 열기', () => openProject(path));
   action('프로젝트 이름 편집', () => editProjectName(path));
+  if (!state.client) action('폴더 위치 변경', () => pickProjectLocation(path));
   action('프로젝트 제거', () => removeProject(path));
   menu.addEventListener('pointerdown', event => event.stopPropagation());
   menu.addEventListener('keydown', event => {
@@ -375,6 +431,7 @@ function addRecentProject(path) {
   state.settings.removedProjects = state.settings.removedProjects.filter(value => !matches(value));
   persist();
   renderHomeOrbit();
+  if (!state.settings.projectIds?.[projectKey(path)]) syncProjectLocations();
 }
 async function pickHomeProject() {
   // The Home picker registers a project only. Its orbit node remains the action
@@ -600,6 +657,7 @@ async function launchSession(profile, project) {
 async function pickFolderForSession() { const path = await chooseLocal('folder'); if (path) { addRecentProject(path); newSessionDialog({ project: path }); } }
 // A project chosen on the Home screen: go to its running session, or start one.
 async function openProject(path) {
+  if (!state.client) { path = await locateProject(path); if (!path) return; }
   addRecentProject(path); showWorkspace();
   const running = state.terminals.find(t => !t.pane.exited && matchesProject(sessionProject(t), path));
   if (running) { activateTerminal(running.id); running.pane.focus(); } else { focusProject(path); newSessionDialog({ project: path }); }
@@ -1016,7 +1074,10 @@ async function preferences(){
     themeSelect.onchange = () => { state.settings.theme = themeSelect.value; apply(); };
     const hidden=el('label','setting-row');const hiddenCheck=el('input');hiddenCheck.type='checkbox';hiddenCheck.checked=state.hidden;hidden.append(el('span','','숨김 폴더 · node_modules 표시'),hiddenCheck);hiddenCheck.onchange=guard(async()=>{state.hidden=hiddenCheck.checked;await refreshTree();});
     const usage=el('div','usage-result','필요할 때만 사용량을 측정합니다.');const measure=button('앱 호스트 사용량 측정','secondary',guard(async()=>{measure.disabled=true;try{const m=await call('metrics');usage.textContent=`메모리 ${m.hostMemoryMb} MB · CPU ${m.hostCpu}%\n${m.note}`;}finally{measure.disabled=false;}}));
-    node.append(mode,font,shell,theme,hidden,el('h3','','리소스 사용'),el('p','muted','작업 폴더를 상시 감시하거나 파일 전체를 색인하지 않습니다. 실행 중인 에이전트의 CPU·메모리 사용량은 해당 CLI와 작업에 따라 달라집니다.'),measure,usage,el('p','dialog-note','파일 탭 최대 8개 · 파일당 4MB · 터미널 최대 8개\n터미널을 닫으면 연결된 하위 프로세스도 종료됩니다.'));
+    // Windows only: a value under the user's Run key; Orbit then starts minimized with the PC.
+    const startup=el('label','setting-row');const startupCheck=el('input');startupCheck.type='checkbox';startupCheck.id='start-with-windows';startupCheck.disabled=true;startup.append(el('span','','Windows 시작 시 Orbit 실행 · 최소화'),startupCheck);startup.hidden=!isDesktop||isMac;
+    if(!startup.hidden){call('startup').then(r=>{startupCheck.checked=r.enabled===true;startupCheck.disabled=false;}).catch(()=>{startup.hidden=true;});startupCheck.onchange=guard(async()=>{startupCheck.disabled=true;try{const r=await call('startup',{enabled:startupCheck.checked});startupCheck.checked=r.enabled===true;toast(r.enabled?'Windows 시작 시 Orbit이 실행됩니다.':'시작프로그램에서 Orbit을 뺐습니다.');}catch(e){startupCheck.checked=!startupCheck.checked;throw e;}finally{startupCheck.disabled=false;}});}
+    node.append(mode,font,shell,theme,hidden,startup,el('h3','','리소스 사용'),el('p','muted','작업 폴더를 상시 감시하거나 파일 전체를 색인하지 않습니다. 실행 중인 에이전트의 CPU·메모리 사용량은 해당 CLI와 작업에 따라 달라집니다.'),measure,usage,el('p','dialog-note','파일 탭 최대 8개 · 파일당 4MB · 터미널 최대 8개\n터미널을 닫으면 연결된 하위 프로세스도 종료됩니다.'));
     function apply(){updatePower();applyTheme();persist();}
   });
 }
