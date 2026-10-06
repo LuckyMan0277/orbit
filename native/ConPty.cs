@@ -36,6 +36,7 @@ namespace Orbit {
         [DllImport("user32.dll")] internal static extern bool SetProcessDpiAwarenessContext(IntPtr context);
         [DllImport("kernel32.dll")] internal static extern uint SetThreadExecutionState(uint flags);
         internal const uint ES_CONTINUOUS=0x80000000, ES_SYSTEM_REQUIRED=0x00000001;
+        internal const uint WAIT_OBJECT_0=0, WAIT_TIMEOUT=258, WAIT_FAILED=0xffffffff;
         // Taskbar flash until the window is brought forward: says "look here" without taking the keyboard focus from what the user is typing.
         [StructLayout(LayoutKind.Sequential)] internal struct FLASHWINFO { public uint size; public IntPtr window; public uint flags, count, timeout; }
         [DllImport("user32.dll")] internal static extern bool FlashWindowEx(ref FLASHWINFO info);
@@ -72,7 +73,7 @@ namespace Orbit {
         private readonly AutoResetEvent ack = new AutoResetEvent(false), inputReady = new AutoResetEvent(false);
         private readonly ConcurrentQueue<byte[]> input = new ConcurrentQueue<byte[]>();
         private readonly object lifecycle = new object();
-        private int disposed, queuedBytes, exitRaised, consoleClosed;
+        private int disposed, queuedBytes, exitRaised, consoleClosed, readerEnded;
         private readonly Action<string,string> onData;
         private readonly Action<string,int> onExit;
 
@@ -117,26 +118,43 @@ namespace Orbit {
             new Thread(ReadLoop) { IsBackground=true,Name="Orbit output" }.Start();
             new Thread(WriteLoop) { IsBackground=true,Name="Orbit input" }.Start();
             new Thread(delegate() {
-                Win32.WaitForSingleObject(process,uint.MaxValue);
+                // A failed wait is not an exit. Closing the pseudoconsole in that case makes
+                // ReadLoop see EOF, and GetExitCodeProcess then reports STILL_ACTIVE (259);
+                // the old path treated that value as an exit and killed the live job.
+                if(Win32.WaitForSingleObject(process,uint.MaxValue)!=Win32.WAIT_OBJECT_0)return;
                 lock(lifecycle) { if(job!=IntPtr.Zero) Win32.TerminateJobObject(job,0); }
                 // ClosePseudoConsole can wait until the output pipe is drained. This
                 // waiter is never the UI thread; ReadLoop remains active until EOF.
                 CloseConsole();
+                // Normally ReadLoop observes the EOF caused above and owns completion. If
+                // its pipe ended early while the process was still alive, it has already
+                // returned, so complete the session here after the real process signal.
+                if(Volatile.Read(ref readerEnded)!=0)Finish(ExitCode());
             }) { IsBackground=true,Name="Orbit process" }.Start();
         }
         private void ReadLoop() {
-            int code=-1;
             try {
                 char[] buffer=new char[8192]; int count;
                 while((count=reader.Read(buffer,0,buffer.Length))>0) {
                     if(disposed!=0) continue; // User closed it: drain without renderer ack.
-                    onData(Id,new string(buffer,0,count));
-                    ack.WaitOne();
+                    // A renderer/dispatch failure must not tear down the PTY reader. The old
+                    // outer catch finalized it with the fallback -1 code and killed the
+                    // otherwise healthy process job.
+                    bool delivered=false;
+                    try {onData(Id,new string(buffer,0,count));delivered=true;}catch(Exception){}
+                    if(delivered)ack.WaitOne();
                 }
-                uint nativeCode; if(process!=IntPtr.Zero && Win32.GetExitCodeProcess(process,out nativeCode)) code=(int)nativeCode;
             } catch (Exception) { }
-            finally { Finish(code); }
+            finally {
+                Volatile.Write(ref readerEnded,1);
+                // EOF alone does not prove that the terminal process ended. In particular,
+                // 259 from GetExitCodeProcess means STILL_ACTIVE unless the handle is signaled.
+                if(ProcessExited())Finish(ExitCode());
+            }
         }
+        internal static bool IsExitWait(uint result) { return result==Win32.WAIT_OBJECT_0; }
+        private bool ProcessExited() {IntPtr value=process;return value!=IntPtr.Zero&&IsExitWait(Win32.WaitForSingleObject(value,0));}
+        private int ExitCode() {uint code;IntPtr value=process;return value!=IntPtr.Zero&&Win32.GetExitCodeProcess(value,out code)?unchecked((int)code):-1;}
         private void WriteLoop() {
             try {
                 while(disposed==0) {

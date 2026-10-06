@@ -150,6 +150,13 @@ namespace Orbit {
                 try {p.Start();p.Resize(110,32);p.Write("echo ORBIT_PTY_OK\r\n");if(!marker.WaitOne(10000))throw new Exception("No terminal output: "+output);p.Write("exit\r\n");if(!done.WaitOne(10000))throw new Exception("Process exit did not finish");}
                 finally {p.Dispose();}
             });
+            test("ConPTY only treats a signaled process as exited",()=> {
+                if(ConPty.IsExitWait(Win32.WAIT_TIMEOUT)||ConPty.IsExitWait(Win32.WAIT_FAILED)||!ConPty.IsExitWait(Win32.WAIT_OBJECT_0))throw new Exception("process wait results are classified incorrectly");
+                var output=new StringBuilder();var callbackFailed=new ManualResetEvent(false);var afterFailure=new ManualResetEvent(false);var done=new ManualResetEvent(false);int injected=0,exits=0,exitCode=-1;ConPty p=null;
+                p=new ConPty("idle-test",dir,"\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d /q",80,24,(id,text)=>{if(text.Contains("ORBIT_INJECT_READER_FAILURE")&&Interlocked.Exchange(ref injected,1)==0){callbackFailed.Set();throw new Exception("injected output dispatch failure");}lock(output){output.Append(text);if(output.ToString().Contains("ORBIT_AFTER_FAILURE"))afterFailure.Set();}p.Acknowledge();},(id,code)=>{exitCode=code;Interlocked.Increment(ref exits);done.Set();});
+                try {p.Start();p.Write("echo ORBIT_INJECT_READER_FAILURE\r\n");if(!callbackFailed.WaitOne(10000))throw new Exception("output failure was not injected");Thread.Sleep(1500);p.Write("echo ORBIT_AFTER_FAILURE\r\n");if(!afterFailure.WaitOne(10000))throw new Exception("terminal output reader did not survive dispatch failure: "+output);if(Volatile.Read(ref exits)!=0)throw new Exception("live terminal emitted an exit");p.Write("exit /b 259\r\n");if(!done.WaitOne(10000))throw new Exception("explicit exit 259 did not finish");if(Volatile.Read(ref exits)!=1||exitCode!=259)throw new Exception("terminal exit 259 was not emitted exactly once: "+exits+" / "+exitCode);}
+                finally {p.Dispose();}
+            });
             test("secret vault encrypts values, keeps them per project and hands them out only by name",()=> {
                 string path=Path.Combine(dir,"secrets.dat"),value="sk-test-Secret-Value-123",projA=Path.Combine(dir,"project-a"),projB=Path.Combine(dir,"project-b"),subA=Path.Combine(projA,"src");
                 var vault=new SecretVault(path);
