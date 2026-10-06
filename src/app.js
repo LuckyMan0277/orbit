@@ -831,7 +831,7 @@ function closeFile(file){return editorOperation(async()=>{
   if(file.saving)await file.saving;
   if(file.dirty && !await confirm('저장하지 않은 변경 사항',`${file.name}의 변경 사항을 버리고 닫을까요?`,'변경 사항 버리기'))return;
   state.files=state.files.filter(f=>f!==file);
-  if(state.file===file){state.editor?.destroy();state.editor=null;state.file=null;if(state.files.length)await activateFileNow(state.files.at(-1));else{$('#editor-section').hidden=true;$('#work-area').classList.remove('has-editor');}}
+  if(state.file===file){state.editor?.destroy();state.editor=null;state.file=null;if(state.files.length)await activateFileNow(state.files.at(-1));else{$('#editor-section').hidden=true;$('#work-area').classList.remove('has-editor');activeTerminal()?.pane.focus();}}
   renderFileTabs();notifyDirty();
 });}
 function reloadFile(){
