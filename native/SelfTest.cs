@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
 using System.Net;
@@ -156,6 +157,13 @@ namespace Orbit {
                 p=new ConPty("idle-test",dir,"\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d /q",80,24,(id,text)=>{if(text.Contains("ORBIT_INJECT_READER_FAILURE")&&Interlocked.Exchange(ref injected,1)==0){callbackFailed.Set();throw new Exception("injected output dispatch failure");}lock(output){output.Append(text);if(output.ToString().Contains("ORBIT_AFTER_FAILURE"))afterFailure.Set();}p.Acknowledge();},(id,code)=>{exitCode=code;Interlocked.Increment(ref exits);done.Set();});
                 try {p.Start();p.Write("echo ORBIT_INJECT_READER_FAILURE\r\n");if(!callbackFailed.WaitOne(10000))throw new Exception("output failure was not injected");Thread.Sleep(1500);p.Write("echo ORBIT_AFTER_FAILURE\r\n");if(!afterFailure.WaitOne(10000))throw new Exception("terminal output reader did not survive dispatch failure: "+output);if(Volatile.Read(ref exits)!=0)throw new Exception("live terminal emitted an exit");p.Write("exit /b 259\r\n");if(!done.WaitOne(10000))throw new Exception("explicit exit 259 did not finish");if(Volatile.Read(ref exits)!=1||exitCode!=259)throw new Exception("terminal exit 259 was not emitted exactly once: "+exits+" / "+exitCode);}
                 finally {p.Dispose();}
+            });
+            test("maximized window bounds stay relative to every monitor",()=> {
+                Func<Rectangle,Rectangle,Rectangle> metrics=WindowChrome.MaximizeMetrics;
+                if(metrics(new Rectangle(0,0,1920,1080),new Rectangle(0,0,1920,1040))!=new Rectangle(0,0,1920,1040))throw new Exception("primary monitor maximize metrics are wrong");
+                if(metrics(new Rectangle(1920,0,2560,1440),new Rectangle(1920,40,2560,1400))!=new Rectangle(0,40,2560,1400))throw new Exception("right monitor retained desktop coordinates");
+                if(metrics(new Rectangle(-1600,-200,1600,1200),new Rectangle(-1600,-160,1560,1160))!=new Rectangle(0,40,1560,1160))throw new Exception("left/above monitor retained negative desktop coordinates");
+                if(metrics(new Rectangle(0,-2160,3840,2160),new Rectangle(0,-2160,3780,2160))!=new Rectangle(0,0,3780,2160))throw new Exception("mixed-size upper monitor metrics are wrong");
             });
             test("secret vault encrypts values, keeps them per project and hands them out only by name",()=> {
                 string path=Path.Combine(dir,"secrets.dat"),value="sk-test-Secret-Value-123",projA=Path.Combine(dir,"project-a"),projB=Path.Combine(dir,"project-b"),subA=Path.Combine(projA,"src");
