@@ -35,6 +35,18 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1
 
+      - name: Prepare the pinned Codex CLI for the disposable deletion fixture
+        shell: pwsh
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP 'Orbit-codex-test'
+          npm install --prefix $testRoot --no-save --no-audit --no-fund '@openai/codex@0.161.0'
+          if ($LASTEXITCODE -ne 0) { throw 'Test-only Codex installation failed' }
+          $executables = @(Get-ChildItem "$testRoot/node_modules" -Recurse -File -Filter 'codex.exe')
+          if ($executables.Count -ne 1) { throw 'Expected one native test-only Codex executable' }
+          $version = & $executables[0].FullName --version
+          if ($LASTEXITCODE -ne 0 -or $version.Trim() -ne 'codex-cli 0.161.0') { throw 'Test-only Codex version mismatch' }
+          $executables[0].DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
       - name: Verify terminal regressions and build manifest
         shell: pwsh
         run: |
@@ -48,6 +60,7 @@ jobs:
           $files = @(Get-ChildItem $app -Recurse -File | Where-Object Name -ne 'self-test-results.txt' | ForEach-Object {
             @{ path = [IO.Path]::GetRelativePath($app, $_.FullName).Replace('\', '/'); sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $_.Length }
           })
+          if (@($files | Where-Object { $_.path -match '(?i)(codex|node_modules)' }).Count -ne 0) { throw 'Test-only tooling entered the Orbit bundle' }
           foreach ($relative in @('conpty.dll', 'x64/OpenConsole.exe')) {
             $signature = Get-AuthenticodeSignature "$app/$relative"
             if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'ConPTY signature is not valid' }
