@@ -35,6 +35,25 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1
 
+      - name: Verify terminal regressions and build manifest
+        shell: pwsh
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript regressions failed' }
+          $app = (Resolve-Path 'release/Orbit').Path
+          $probe = Start-Process "$app/Orbit.exe" -ArgumentList '--self-test' -WindowStyle Hidden -PassThru
+          if (-not $probe.WaitForExit(90000)) { $probe.Kill(); throw 'Own native self-test exceeded 90 seconds' }
+          Get-Content "$app/self-test-results.txt"
+          if ($probe.ExitCode -ne 0) { throw 'Native regressions failed' }
+          $files = @(Get-ChildItem $app -Recurse -File | Where-Object Name -ne 'self-test-results.txt' | ForEach-Object {
+            @{ path = [IO.Path]::GetRelativePath($app, $_.FullName).Replace('\', '/'); sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $_.Length }
+          })
+          foreach ($relative in @('conpty.dll', 'x64/OpenConsole.exe')) {
+            $signature = Get-AuthenticodeSignature "$app/$relative"
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'ConPTY signature is not valid' }
+          }
+          @{ sourceSha = '${{ github.sha }}'; version = $env:APP_VERSION; conptyVersion = '1.25.260930003'; files = $files } | ConvertTo-Json -Depth 5 | Set-Content 'release/Orbit-build-manifest.json' -Encoding utf8
+
       - name: Ensure Inno Setup
         shell: pwsh
         run: |
@@ -49,14 +68,47 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer/orbit.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 
+      - name: Verify installer contents in an isolated runner directory
+        shell: pwsh
+        run: |
+          $runnerRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+          $installRoot = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "Orbit-installer-test-${{ github.run_id }}"))
+          if (-not $installRoot.StartsWith($runnerRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Install test path escaped runner temp' }
+          $installer = Start-Process (Resolve-Path 'release/Orbit-Setup.exe').Path -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS', "/DIR=`"$installRoot`"") -WindowStyle Hidden -PassThru
+          if (-not $installer.WaitForExit(90000)) { $installer.Kill(); throw 'Own installer test exceeded 90 seconds' }
+          if ($installer.ExitCode -ne 0) { throw 'Isolated installer failed' }
+          $ownExe = Join-Path $installRoot 'Orbit.exe'
+          Get-CimInstance Win32_Process -Filter "Name = 'Orbit.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($ownExe, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
+          $manifest = Get-Content 'release/Orbit-build-manifest.json' -Raw | ConvertFrom-Json
+          foreach ($file in $manifest.files) {
+            $actual = (Get-FileHash (Join-Path $installRoot $file.path) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $file.sha256) { throw "Installer content mismatch: $($file.path)" }
+          }
+          foreach ($relative in @('conpty.dll', 'x64/OpenConsole.exe')) {
+            if ((Get-AuthenticodeSignature (Join-Path $installRoot $relative)).Status -ne 'Valid') { throw 'Installed ConPTY signature is not valid' }
+          }
+          $manifest | Add-Member -NotePropertyName installerContentVerified -NotePropertyValue $true
+          $digest = (Get-FileHash 'release/Orbit-Setup.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest | Add-Member -NotePropertyName installerSha256 -NotePropertyValue $digest
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content 'release/Orbit-build-manifest.json' -Encoding utf8
+          "$digest  Orbit-Setup.exe" | Set-Content 'release/SHA256SUMS.txt' -Encoding ascii
+
       - uses: actions/upload-artifact@v4
         with:
           name: Orbit-Setup
-          path: release/Orbit-Setup.exe
+          path: |
+            release/Orbit-Setup.exe
+            release/Orbit-build-manifest.json
+            release/SHA256SUMS.txt
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create '${{ github.ref_name }}' release/Orbit-Setup.exe --title 'Orbit ${{ github.ref_name }}' --generate-notes
+        run: |
+          $notes = 'docs/releases/${{ github.ref_name }}.md'
+          $releaseArgs = @('release', 'create', '${{ github.ref_name }}', 'release/Orbit-Setup.exe', 'release/Orbit-build-manifest.json', 'release/SHA256SUMS.txt', '--title', 'Orbit ${{ github.ref_name }}')
+          if (Test-Path $notes) { $releaseArgs += @('--notes-file', $notes) } else { $releaseArgs += '--generate-notes' }
+          & gh @releaseArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

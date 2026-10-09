@@ -8,6 +8,8 @@ import { extractLinks } from './links.js';
 import { el, toast, confirm } from './ui.js';
 import { prepareTerminalPaste } from './terminal-paste.js';
 import { isMac } from './platform.js';
+import { createTerminalOutputReceiver } from './terminal-output.js';
+import { terminalSize } from './terminal-size.js';
 
 const terminalTheme = name => name === 'light'
   ? { background: '#fcfbff', foreground: '#30313b', cursor: '#50307c', selectionBackground: '#d8cbed99', black: '#30313b', red: '#b43d57', green: '#2f754c', yellow: '#766016', blue: '#28629a', magenta: '#71499c', cyan: '#287278', white: '#5a5363', brightBlack: '#756d7e', brightRed: '#8f253f', brightGreen: '#1e653c', brightYellow: '#63500d', brightBlue: '#1d548b', brightMagenta: '#5f358f', brightCyan: '#17656d', brightWhite: '#3f3947' }
@@ -22,7 +24,7 @@ export class TerminalPane {
     this.term = new Terminal({ fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", monospace', fontSize: settings.fontSize, lineHeight: 1.24, scrollback: settings.lowPower ? 500 : 2000, cursorBlink: false, allowProposedApi: false, convertEol: false, minimumContrastRatio: settings.theme === 'light' ? 4.5 : 1, theme: terminalTheme(settings.theme), linkHandler: { activate: (e, text) => openLink(text, this.cwd), allowNonHttpProtocols: true } });
     this.fit = new FitAddon(); this.search = new SearchAddon(); this.serialize = new SerializeAddon(); this.term.loadAddon(this.fit); this.term.loadAddon(this.search); this.term.loadAddon(this.serialize);
     this.term.open(this.element);
-    this.term.onData(data => { if (this.started && !this.exited) notify('write', { session: this.id, data }); });
+    this.term.onData(data => { if (this.started && !this.exited && !this.inputDisconnected) notify('write', { session: this.id, data }); });
     this.term.onResize(({ cols, rows }) => { if (this.started && !this.exited && !this.attached) notify('resize', { session: this.id, cols, rows }); });
     this.term.onBell(() => { if (document.hidden) document.title = '• 터미널 알림 — Orbit'; });
     this.element.addEventListener('pointerdown', onFocus);
@@ -74,30 +76,49 @@ export class TerminalPane {
         return { range: { start: { x: start.x, y: start.y }, end: { x: end.end, y: end.y } }, text: link.value, activate: () => openLink(link.value, this.cwd) };
       }).filter(Boolean));
     } });
+    const receiveOutput = createTerminalOutputReceiver({ write: (text, done) => this.term.write(text, done), notify,
+      processed: seq => { this.lastProcessedSeq = seq || this.lastProcessedSeq || 0; },
+      onOutput: length => { this.outputCount += length; if (onOutput) onOutput(); } });
     this.unsub = on('output', data => {
       if (data.session !== this.id) return;
       if (this.attached && data.seq && data.seq <= (this.lastProcessedSeq || 0)) return; // already part of the snapshot
-      this.outputCount += data.data.length; if (onOutput) onOutput();
-      this.term.write(data.data, () => { this.lastProcessedSeq = data.seq || this.lastProcessedSeq || 0; notify('ack', { session: this.id }); });
+      receiveOutput(data);
     });
     this.unsnapshot = on('remoteSnapshot', data => { if(data.session === this.id) this.term.write('', () => notify('remoteSnapshot', { session: this.id, request:data.request, data: this.serialize.serialize(), seq: this.lastProcessedSeq || 0, cols: this.term.cols, rows: this.term.rows })); });
-    this.unexit = on('exit', data => { if (data.session === this.id && !this.closed) { this.exited = true; this.term.write(`\r\n\x1b[90m[프로세스 종료 · 코드 ${data.code}]\x1b[0m\r\n`); onExit(data.code); } });
-    this.observer = new ResizeObserver(() => { if (!this.attached && this.element.clientWidth && this.element.clientHeight) this.fit.fit(); });
+    this.unexit = on('exit', data => { if (data.session === this.id && !this.closed) { this.exited = true; this.faultNotice?.remove(); this.term.write(`\r\n\x1b[90m[프로세스 종료 · 코드 ${data.code}]\x1b[0m\r\n`); onExit(data.code); } });
+    this.unfault = on('terminalFault', data => {
+      if (data.session !== this.id || this.closed || this.exited) return;
+      this.inputDisconnected ||= data.inputDisconnected;
+      const state = data.processState === 'running' ? '프로세스는 실행 중입니다.' : data.processState === 'exited' ? '프로세스가 종료되었습니다.' : '프로세스 상태를 확인할 수 없습니다.';
+      this.faultNotice ||= el('div', 'terminal-fault');
+      this.faultNotice.textContent = `${data.operation === 'resize' ? '화면 크기 변경 실패' : '터미널 연결 끊김'} · ${data.hresult} · ${state}`;
+      this.element.append(this.faultNotice);
+    });
+    this.observer = new ResizeObserver(() => { if (!this.attached) this.fitTerminal(); });
     this.observer.observe(this.element);
   }
   async start() {
     if (this.attached) {
       const { cols, rows, data, seq } = this.attach;
-      this.term.resize(Math.max(10, cols || 80), Math.max(3, rows || 24));
+      const size = terminalSize({ cols: Math.max(10, cols || 80), rows: Math.max(3, rows || 24) }, !isMac);
+      this.term.resize(size.cols, size.rows);
       this.lastProcessedSeq = seq || 0; this.started = true;
       if (data) await new Promise(resolve => this.term.write(data, resolve));
       return;
     }
-    this.fit.fit();
+    this.fitTerminal();
     const result = await call('createTerminal', { session: this.id, cwd: this.cwd, profile: this.profile, resumeId: this.resumeId, name: this.name, ...(this.secrets ? { secrets: this.secrets } : {}), cols: this.term.cols, rows: this.term.rows });
     this.started = true; this.pid = result.pid; this.focus();
   }
-  focus() { requestAnimationFrame(() => { if (!this.closed && this.element.clientWidth) { if (!this.attached) this.fit.fit(); this.term.focus(); } }); }
+  fitTerminal() {
+    if (this.closed || !this.element.clientWidth || !this.element.clientHeight) return;
+    const proposed = this.fit.proposeDimensions();
+    if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return;
+    if (isMac) { this.fit.fit(); return; }
+    const { cols, rows } = terminalSize(proposed, !isMac);
+    if (cols !== this.term.cols || rows !== this.term.rows) { this.term.resize(cols, rows); this.term.refresh(0, rows - 1); }
+  }
+  focus() { requestAnimationFrame(() => { if (!this.closed && this.element.clientWidth && this.element.clientHeight) { if (!this.attached) this.fitTerminal(); this.term.focus(); } }); }
   // Moving the pane in the DOM (session/tab switch, split) resets the scroll area to 0 while xterm still thinks it is scrolled, so the wheel stops scrolling up. Re-sync it once attached.
   syncScroll() {
     requestAnimationFrame(() => {
@@ -106,23 +127,25 @@ export class TerminalPane {
       viewport.scrollTop = buffer.viewportY >= buffer.baseY ? viewport.scrollHeight : Math.round(viewport.scrollHeight * buffer.viewportY / buffer.length);
     });
   }
-  configure(settings) { this.term.options.fontSize = settings.fontSize; this.term.options.scrollback = settings.lowPower ? 500 : 2000; this.term.options.minimumContrastRatio = settings.theme === 'light' ? 4.5 : 1; this.term.options.theme = terminalTheme(settings.theme); if (!this.attached) this.fit.fit(); }
+  configure(settings) { this.term.options.fontSize = settings.fontSize; this.term.options.scrollback = settings.lowPower ? 500 : 2000; this.term.options.minimumContrastRatio = settings.theme === 'light' ? 4.5 : 1; this.term.options.theme = terminalTheme(settings.theme); if (!this.attached) this.fitTerminal(); }
   copySelection(clear) {
     const text = this.term.getSelection();
     if (!text) return;
     call('clipboard', { text }).then(() => { if (clear) this.term.clearSelection(); }).catch(e => toast(e.message, true));
   }
   async pasteClipboard() {
+    if (this.inputDisconnected) return toast('터미널 입력 연결이 끊겼습니다.', true);
     if (this.exited || !this.started) return toast('실행 중인 터미널을 선택해 주세요.', true);
     const text = await call('clipboardRead');
     if (text) await this.paste(text);
   }
   async paste(text) {
+    if (this.inputDisconnected) return toast('터미널 입력 연결이 끊겼습니다.', true);
     if (this.exited || !this.started) return toast('실행 중인 터미널을 선택해 주세요.', true);
     const prepared = prepareTerminalPaste(text, this.term.modes.bracketedPasteMode);
     this.term.paste(prepared.text);
     if (prepared.collapsed) toast('줄바꿈은 실행되지 않도록 공백으로 붙여넣었습니다.');
     this.focus();
   }
-  dispose() { this.closed = true; this.unsub(); this.unexit(); this.unsnapshot(); this.observer.disconnect(); this.term.dispose(); this.element.remove(); }
+  dispose() { this.closed = true; this.unsub(); this.unexit(); this.unfault(); this.unsnapshot(); this.observer.disconnect(); this.term.dispose(); this.element.remove(); }
 }

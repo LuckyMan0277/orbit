@@ -106,7 +106,8 @@ namespace Orbit {
         private void EmitOutput(string key,object message,int size) {
             string owner;
             if(!sessionOwners.TryGetValue(key,out owner)) {
-                Send(message);
+                TerminalOutputDelivery delivery;
+                if(terminalDeliveries.TryGetValue(key,out delivery))PostTerminalOutput(key,delivery);
                 ConcurrentDictionary<string,bool> viewers;
                 if(sessionViewers.TryGetValue(key,out viewers))foreach(string id in viewers.Keys)EmitToViewer(id,key,message,size);
                 return;
@@ -133,6 +134,11 @@ namespace Orbit {
             EmitTo(owner,message);
             ConcurrentDictionary<string,bool> viewers;
             if(owner==null&&sessionViewers.TryRemove(key,out viewers))foreach(string id in viewers.Keys)EmitTo(id,message);
+        }
+        private void EmitTerminalFault(string key,string owner,object message) {
+            EmitTo(owner,message);
+            ConcurrentDictionary<string,bool> viewers;
+            if(owner==null&&sessionViewers.TryGetValue(key,out viewers))foreach(string id in viewers.Keys)EmitTo(id,message);
         }
 
         // ---------------------------------------------------------------- client side

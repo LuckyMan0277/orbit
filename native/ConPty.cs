@@ -17,9 +17,14 @@ namespace Orbit {
         [StructLayout(LayoutKind.Sequential)] internal struct IO_COUNTERS { public ulong readOps,writeOps,otherOps,readBytes,writeBytes,otherBytes; }
         [StructLayout(LayoutKind.Sequential)] internal struct EXTENDED_LIMIT { public BASIC_LIMIT basic; public IO_COUNTERS io; public UIntPtr processMemory,jobMemory,peakProcess,peakJob; }
         [DllImport("kernel32.dll", SetLastError=true)] internal static extern bool CreatePipe(out IntPtr read, out IntPtr write, IntPtr attrs, uint size);
-        [DllImport("kernel32.dll")] internal static extern int CreatePseudoConsole(COORD size, IntPtr input, IntPtr output, uint flags, out IntPtr console);
-        [DllImport("kernel32.dll")] internal static extern int ResizePseudoConsole(IntPtr console, COORD size);
-        [DllImport("kernel32.dll")] internal static extern void ClosePseudoConsole(IntPtr console);
+        // Use one matched, app-local Microsoft ConPTY backend for the entire HPCON
+        // lifetime. Old Windows 10 inbox conhost crashes on cooked input + shrink.
+        [DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory)]
+        [DllImport("conpty.dll",EntryPoint="ConptyCreatePseudoConsole")] internal static extern int CreatePseudoConsole(COORD size, IntPtr input, IntPtr output, uint flags, out IntPtr console);
+        [DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory)]
+        [DllImport("conpty.dll",EntryPoint="ConptyResizePseudoConsole")] internal static extern int ResizePseudoConsole(IntPtr console, COORD size);
+        [DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory)]
+        [DllImport("conpty.dll",EntryPoint="ConptyClosePseudoConsole")] internal static extern void ClosePseudoConsole(IntPtr console);
         [DllImport("kernel32.dll", SetLastError=true)] internal static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
         [DllImport("kernel32.dll", SetLastError=true)] internal static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attr, IntPtr value, IntPtr size, IntPtr previous, IntPtr returned);
         [DllImport("kernel32.dll")] internal static extern void DeleteProcThreadAttributeList(IntPtr list);
@@ -73,12 +78,25 @@ namespace Orbit {
         private readonly AutoResetEvent ack = new AutoResetEvent(false), inputReady = new AutoResetEvent(false);
         private readonly ConcurrentQueue<byte[]> input = new ConcurrentQueue<byte[]>();
         private readonly object lifecycle = new object();
-        private int disposed, queuedBytes, exitRaised, consoleClosed, readerEnded;
-        private readonly Action<string,string> onData;
+        private readonly object resizeGate=new object(), inputGate=new object();
+        private readonly ManualResetEvent resizeDone=new ManualResetEvent(true);
+        private readonly ManualResetEvent consoleCloseDone=new ManualResetEvent(false);
+        private int disposed, queuedBytes, exitRaised, consoleClosed, readerEnded, inputFailed;
+        private int requestedCols,requestedRows,appliedCols,appliedRows;
+        private DateTime lastResizeUtc;
+        private readonly System.Collections.Generic.Queue<TerminalResizeTrace> recentResizes=new System.Collections.Generic.Queue<TerminalResizeTrace>();
+        private bool resizePending,resizeWorkerRunning;
+        private readonly System.Collections.Generic.HashSet<string> reportedFaults=new System.Collections.Generic.HashSet<string>();
+        internal Action<TerminalFault> OnFault;
+        private long outputSequence, acknowledgedSequence;
+        private readonly Action<string,string,long,bool> onData;
         private readonly Action<string,int> onExit;
 
-        public ConPty(string id, string cwd, string command, int cols, int rows, Action<string,string> data, Action<string,int> exit, System.Collections.Generic.IDictionary<string,string> env=null) {
+        public ConPty(string id, string cwd, string command, int cols, int rows, Action<string,string> data, Action<string,int> exit, System.Collections.Generic.IDictionary<string,string> env=null)
+            : this(id,cwd,command,cols,rows,(key,text,seq,retry)=>data(key,text),exit,env) { }
+        public ConPty(string id, string cwd, string command, int cols, int rows, Action<string,string,long,bool> data, Action<string,int> exit, System.Collections.Generic.IDictionary<string,string> env=null) {
             Id=id; onData=data; onExit=exit;
+            cols=ClampCols(cols);rows=ClampRows(rows);requestedCols=appliedCols=cols;requestedRows=appliedRows=rows;
             IntPtr readIn=IntPtr.Zero, writeIn=IntPtr.Zero, readOut=IntPtr.Zero, writeOut=IntPtr.Zero, attributes=IntPtr.Zero, environment=IntPtr.Zero;
             Win32.PROCESS_INFORMATION pi = new Win32.PROCESS_INFORMATION();
             bool attrInitialized=false;
@@ -137,19 +155,25 @@ namespace Orbit {
                 char[] buffer=new char[8192]; int count;
                 while((count=reader.Read(buffer,0,buffer.Length))>0) {
                     if(disposed!=0) continue; // User closed it: drain without renderer ack.
-                    // A renderer/dispatch failure must not tear down the PTY reader. The old
-                    // outer catch finalized it with the fallback -1 code and killed the
-                    // otherwise healthy process job.
-                    bool delivered=false;
-                    try {onData(Id,new string(buffer,0,count));delivered=true;}catch(Exception){}
-                    if(delivered)ack.WaitOne();
+                    // Keep exactly one chunk until its own ACK arrives. Retry the same
+                    // sequence after an ACK/post failure; never read ahead into an unbounded
+                    // renderer backlog. The host coalesces posts while its UI is stalled.
+                    string text=new string(buffer,0,count);
+                    long sequence=Interlocked.Increment(ref outputSequence);bool retry=false;
+                    do {
+                        try {onData(Id,text,sequence,retry);}catch(Exception){}
+                        retry=true;
+                        if(disposed!=0||Interlocked.Read(ref acknowledgedSequence)>=sequence)break;
+                        ack.WaitOne(1000);
+                    } while(disposed==0&&Interlocked.Read(ref acknowledgedSequence)<sequence);
                 }
-            } catch (Exception) { }
+            } catch (Exception error) { ReportFault("read",error); }
             finally {
                 Volatile.Write(ref readerEnded,1);
                 // EOF alone does not prove that the terminal process ended. In particular,
                 // 259 from GetExitCodeProcess means STILL_ACTIVE unless the handle is signaled.
                 if(ProcessExited())Finish(ExitCode());
+                else if(disposed==0)ReportFault("output-eof",null);
             }
         }
         internal static bool IsExitWait(uint result) { return result==Win32.WAIT_OBJECT_0; }
@@ -163,37 +187,101 @@ namespace Orbit {
                         Interlocked.Add(ref queuedBytes,-bytes.Length); writer.Write(bytes,0,bytes.Length); writer.Flush();
                     }
                 }
-            } catch(Exception) { Dispose(); }
+            } catch(Exception error) {
+                // A pipe failure is not process exit. Keep the job alive for diagnosis or
+                // deliberate close, and stop accepting bytes into an abandoned queue.
+                lock(inputGate) { inputFailed=1;byte[] discarded;while(input.TryDequeue(out discarded)){}Interlocked.Exchange(ref queuedBytes,0); }
+                ReportFault("write",error);
+            }
         }
         public void Write(string text) {
+            lock(inputGate) {
+            if(inputFailed!=0)throw new InvalidOperationException("터미널 입력 연결이 끊겼습니다. 실행 중인 프로세스는 자동으로 종료하지 않았습니다.");
             if(disposed!=0) throw new InvalidOperationException("종료된 터미널입니다.");
             byte[] bytes=Encoding.UTF8.GetBytes(text);
             if(Interlocked.Add(ref queuedBytes,bytes.Length)>1024*1024) { Interlocked.Add(ref queuedBytes,-bytes.Length); throw new InvalidOperationException("입력이 너무 큽니다. 나누어 붙여넣어 주세요."); }
             input.Enqueue(bytes); inputReady.Set();
+            }
         }
-        public void Acknowledge() { ack.Set(); }
-        public void Resize(int cols,int rows) { lock(lifecycle) { if(disposed==0) Marshal.ThrowExceptionForHR(Win32.ResizePseudoConsole(console,new Win32.COORD(Math.Max(10,Math.Min(500,cols)),Math.Max(3,Math.Min(300,rows))))); } }
+        public void Acknowledge() { Acknowledge(Interlocked.Read(ref outputSequence)); }
+        public void Acknowledge(long sequence) {
+            if(sequence<=0||sequence!=Interlocked.Read(ref outputSequence))return;
+            Interlocked.Exchange(ref acknowledgedSequence,sequence);ack.Set();
+        }
+        internal static int ClampCols(int cols) { return Math.Max(10,Math.Min(500,cols)); }
+        internal static int ClampRows(int rows) { return Math.Max(3,Math.Min(300,rows)); }
+        public void Resize(int cols,int rows) {
+            lock(resizeGate) {
+                if(disposed!=0||consoleClosed!=0)return;
+                requestedCols=ClampCols(cols);requestedRows=ClampRows(rows);lastResizeUtc=DateTime.UtcNow;resizePending=true;
+                if(resizeWorkerRunning)return;
+                resizeWorkerRunning=true;resizeDone.Reset();
+                try {if(!ThreadPool.QueueUserWorkItem(_=>ResizeLoop()))throw new InvalidOperationException("Resize scheduling failed");}
+                catch(Exception error) {resizeWorkerRunning=false;resizeDone.Set();ReportFault("resize",error);}
+            }
+        }
+        private void ResizeLoop() {
+            bool released=false;
+            try {
+                while(true) {
+                    int cols,rows;
+                    lock(resizeGate) {
+                        if(disposed!=0||consoleClosed!=0||!resizePending) {resizeWorkerRunning=false;resizeDone.Set();released=true;return;}
+                        cols=requestedCols;rows=requestedRows;resizePending=false;if(cols==appliedCols&&rows==appliedRows)continue;
+                    }
+                    IntPtr value;lock(lifecycle)value=console;
+                    if(disposed!=0||consoleClosed!=0||value==IntPtr.Zero)break;
+                    // The control pipe can block while conhost waits for output to drain.
+                    // Never hold the UI thread or lifecycle lock: its ACK/close must run.
+                    var trace=new TerminalResizeTrace {Utc=DateTime.UtcNow.ToString("o"),Cols=cols,Rows=rows};
+                    lock(resizeGate) {recentResizes.Enqueue(trace);while(recentResizes.Count>12)recentResizes.Dequeue();}
+                    int hr=Win32.ResizePseudoConsole(value,new Win32.COORD(cols,rows));
+                    lock(resizeGate)trace.HResult=hr.ToString("X8");
+                    if(hr<0) { ReportFault("resize",Marshal.GetExceptionForHR(hr));continue; }
+                    lock(resizeGate) {appliedCols=cols;appliedRows=rows;}
+                }
+            } catch(Exception error) {ReportFault("resize",error);}
+            finally {if(!released)lock(resizeGate){resizeWorkerRunning=false;resizeDone.Set();}}
+        }
+        private void ReportFault(string operation,Exception error) {
+            if(disposed!=0)return;
+            var value=process;uint wait=value==IntPtr.Zero?Win32.WAIT_FAILED:Win32.WaitForSingleObject(value,0);
+            int cols,rows,actualCols,actualRows;DateTime resized;lock(resizeGate){cols=requestedCols;rows=requestedRows;actualCols=appliedCols;actualRows=appliedRows;resized=lastResizeUtc;}
+            var fault=new TerminalFault { Session=Id,Pid=ProcessId,Operation=operation,HResult=error==null?0:error.HResult,ProcessState=wait==Win32.WAIT_OBJECT_0?"exited":wait==Win32.WAIT_TIMEOUT?"running":"unknown",Cols=cols,Rows=rows,AppliedCols=actualCols,AppliedRows=actualRows,InputDisconnected=Volatile.Read(ref inputFailed)!=0,LastResizeUtc=resized==default(DateTime)?null:resized.ToString("o"),ExitCode=wait==Win32.WAIT_OBJECT_0?(int?)ExitCode():null };
+            lock(resizeGate)fault.RecentResizes=recentResizes.ToArray();
+            lock(reportedFaults) {if(!reportedFaults.Add(operation+":"+fault.HResult+":"+fault.ProcessState))return;}
+            try {if(OnFault!=null)OnFault(fault);}catch(Exception){}
+        }
         public void Dispose() {
             if(Interlocked.Exchange(ref disposed,1)!=0) return;
             ack.Set(); inputReady.Set();
             lock(lifecycle) { if(job!=IntPtr.Zero) { Win32.TerminateJobObject(job,0); Win32.CloseHandle(job); job=IntPtr.Zero; } }
             // ClosePseudoConsole may wait for its output to drain; keep the UI thread free.
             ThreadPool.QueueUserWorkItem(delegate {
-                CloseConsole();
-                if(writer!=null) writer.Dispose(); if(reader!=null) reader.Dispose();
-                if(process!=IntPtr.Zero) { Win32.CloseHandle(process); process=IntPtr.Zero; }
+                try {CloseConsole();}catch(Exception){}
+                // Dispose can flush a broken FileStream. Cleanup faults must never escape
+                // the pool callback or prevent the remaining resources from closing.
+                try {if(writer!=null)writer.Dispose();}catch(Exception){}
+                try {if(reader!=null)reader.Dispose();}catch(Exception){}
+                lock(lifecycle) {if(process!=IntPtr.Zero) {Win32.CloseHandle(process);process=IntPtr.Zero;}}
             });
         }
         private void Finish(int code) {
             if(Interlocked.Exchange(ref exitRaised,1)!=0) return;
+            ReportFault("process-exit",null);
             Dispose();
             try { onExit(Id,code); } catch(Exception) { }
         }
         private void CloseConsole() {
-            if(Interlocked.Exchange(ref consoleClosed,1)!=0) return;
+            if(Interlocked.Exchange(ref consoleClosed,1)!=0) {consoleCloseDone.WaitOne();return;}
+            try {
+            // Only called by background teardown/waiter. Keep the HPCON valid until its
+            // sole resize worker returns; job termination above releases a blocked host.
+            resizeDone.WaitOne();
             IntPtr value;
             lock(lifecycle) { value=console; console=IntPtr.Zero; }
             if(value!=IntPtr.Zero) Win32.ClosePseudoConsole(value);
+            }finally{consoleCloseDone.Set();}
         }
     }
 }

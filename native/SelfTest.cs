@@ -151,6 +151,11 @@ namespace Orbit {
                 try {p.Start();p.Resize(110,32);p.Write("echo ORBIT_PTY_OK\r\n");if(!marker.WaitOne(10000))throw new Exception("No terminal output: "+output);p.Write("exit\r\n");if(!done.WaitOne(10000))throw new Exception("Process exit did not finish");}
                 finally {p.Dispose();}
             });
+            test("ConPTY ACK recovery, bounded posts, flood delivery and pending disposal",()=>TerminalOutputRecoveryTest.Run(dir));
+            test("ConPTY coalesced resize under ACK backpressure and prompt disposal",()=>TerminalResizeTest.Run(dir));
+            test("ConPTY input fault preserves process, rejects input and retains genuine exits",()=>TerminalResizeTest.InputFault(dir));
+            test("ConPTY cleanup exceptions cannot escape or skip remaining handles",()=>TerminalResizeTest.CleanupFault(dir));
+            test("ConPTY cooked ASCII/CJK input survives shrink, backpressure and expansion",()=>TerminalResizeTest.CookedInput(dir));
             test("ConPTY only treats a signaled process as exited",()=> {
                 if(ConPty.IsExitWait(Win32.WAIT_TIMEOUT)||ConPty.IsExitWait(Win32.WAIT_FAILED)||!ConPty.IsExitWait(Win32.WAIT_OBJECT_0))throw new Exception("process wait results are classified incorrectly");
                 var output=new StringBuilder();var callbackFailed=new ManualResetEvent(false);var afterFailure=new ManualResetEvent(false);var done=new ManualResetEvent(false);int injected=0,exits=0,exitCode=-1;ConPty p=null;

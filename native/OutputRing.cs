@@ -8,8 +8,8 @@ namespace Orbit {
         sealed class Item { public long Seq; public string Data; }
         readonly object gate=new object(); readonly List<Item> items=new List<Item>();
         long next,generation,lastTicks; int bytes; bool closed;
-        public long Advance(string data,bool record) {
-            lock(gate) { long seq=++next;lastTicks=DateTime.UtcNow.Ticks;if(!record){items.Clear();bytes=0;Monitor.PulseAll(gate);return seq;}var item=new Item { Seq=seq,Data=data };items.Add(item);bytes+=data.Length;
+        public long Advance(string data,bool record,long sequence=0) {
+            lock(gate) { long seq=next=sequence>0?sequence:next+1;lastTicks=DateTime.UtcNow.Ticks;if(!record){items.Clear();bytes=0;Monitor.PulseAll(gate);return seq;}var item=new Item { Seq=seq,Data=data };items.Add(item);bytes+=data.Length;
                 while(items.Count>256||bytes>1024*1024){bytes-=items[0].Data.Length;items.RemoveAt(0);}
                 Monitor.PulseAll(gate);return item.Seq;
             }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -84,7 +84,7 @@ namespace Orbit {
                     string msg=(dirty?"저장하지 않은 파일 변경 사항이 있습니다.\n":"")+(sessions.Count>0?"실행 중인 터미널과 하위 프로세스가 종료됩니다.\n":"")+"Orbit을 종료할까요?";
                     if(MessageBox.Show(this,msg,"Orbit 종료",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes) {e.Cancel=true;return;}
                 }
-                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();broker.Stop();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
+                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();broker.Stop();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();terminalDeliveries.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
             };
         }
         private async Task Initialize() {
@@ -163,9 +163,9 @@ namespace Orbit {
         // Shared by the local UI (owner==null) and remote desktop clients (owner==device id).
         private async Task<object> Dispatch(string method,Dictionary<string,object> a,string owner) {
             object result=null;
-            if(owner==null&&clientSession!=null) { if(method=="ack")return null; if(DeskForward.Contains(method))return await DeskForwardCall(method,a); }
+            if(owner==null&&clientSession!=null) { if(method=="ack"||method=="outputReceived")return null; if(DeskForward.Contains(method))return await DeskForwardCall(method,a); }
             if(owner!=null) {
-                if(method=="ack")return null; // remote output is drained by the host itself, see DeskAfterOutput
+                if(method=="ack"||method=="outputReceived")return null; // remote output is drained by the host itself
                 if(method=="write"||method=="resize"||method=="closeTerminal"||method=="terminalName") { string key=S(a,"session"),own;bool mine=sessionOwners.TryGetValue(key,out own)&&own==owner;bool watching=method=="write"&&!sessionOwners.ContainsKey(key)&&IsViewer(key,owner);if(!mine&&!watching)throw new InvalidOperationException("이 원격 클라이언트의 터미널이 아닙니다."); }
             }
             switch(method) {
@@ -238,19 +238,21 @@ namespace Orbit {
                         }
                         command+=" -EncodedCommand "+Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
                     }
-                    outputRings[sid]=new OutputRing();if(owner!=null)sessionOwners[sid]=owner;sessionSizes[sid]=new[]{N(a,"cols",100),N(a,"rows",30)};
-                    var terminal=new ConPty(sid,cwd,command,N(a,"cols",100),N(a,"rows",30),(key,chunk)=>{long seq=RecordOutput(key,chunk);EmitOutput(key,new {type="output",session=key,data=chunk,seq=seq},chunk.Length);},(key,code)=> {
+                    outputRings[sid]=new OutputRing();if(owner!=null)sessionOwners[sid]=owner;sessionSizes[sid]=new[]{ConPty.ClampCols(N(a,"cols",100)),ConPty.ClampRows(N(a,"rows",30))};
+                    var terminal=new ConPty(sid,cwd,command,N(a,"cols",100),N(a,"rows",30),DeliverTerminalOutput,(key,code)=> {
                         broker.Release(key);DeleteAgentNote(key);
-                        if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { string exitOwner;sessionOwners.TryRemove(key,out exitOwner);int[] exitSize;sessionSizes.TryRemove(key,out exitSize);ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);string removedProject;sessionProjects.TryRemove(key,out removedProject);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();EmitExit(key,exitOwner,new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
+                        if(!quitting && IsHandleCreated)try {BeginInvoke(new Action(delegate { ForgetTerminalOutput(key);string exitOwner;sessionOwners.TryRemove(key,out exitOwner);int[] exitSize;sessionSizes.TryRemove(key,out exitSize);ConPty ignored;sessions.TryRemove(key,out ignored);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);string removedProject;sessionProjects.TryRemove(key,out removedProject);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();EmitExit(key,exitOwner,new {type="exit",session=key,code=code}); }));}catch(InvalidOperationException){}
                     },terminalEnv);
+                    terminal.OnFault=fault=> {TerminalDiagnostics.Record(dataRoot,fault);if(fault.Operation!="process-exit")EmitTerminalFault(fault.Session,owner,new {type="terminalFault",session=fault.Session,operation=fault.Operation,hresult=fault.HResult.ToString("X8"),processState=fault.ProcessState,inputDisconnected=fault.InputDisconnected});};
                     if(!sessions.TryAdd(sid,terminal))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");sessionProfiles[sid]=profile;if(!String.IsNullOrEmpty(resumeId))sessionResumeIds[sid]=profile+":"+resumeId;sessionNames[sid]=TerminalName(S(a,"name"),profile);sessionProjects[sid]=cwd;terminal.Start();result=new {pid=terminal.ProcessId};
                     } finally { pendingTerminals.Remove(sid);if(!sessions.ContainsKey(sid)){string failedOwner;sessionOwners.TryRemove(sid,out failedOwner);broker.Release(sid);DeleteAgentNote(sid);} }
                     break;
                 }
                 case "write":GetSession(S(a,"session")).Write(S(a,"data"));break;
-                case "ack": {ConPty terminal;if(sessions.TryGetValue(S(a,"session"),out terminal))terminal.Acknowledge();break;}
-                case "resize":GetSession(S(a,"session")).Resize(N(a,"cols",80),N(a,"rows",24));sessionSizes[S(a,"session")]=new[]{N(a,"cols",80),N(a,"rows",24)};break;
-                case "closeTerminal": {string key=S(a,"session");ConPty terminal;if(sessions.TryRemove(key,out terminal)){string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);string removedProject;sessionProjects.TryRemove(key,out removedProject);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();terminal.Dispose();}break;}
+                case "ack":AcknowledgeTerminalOutput(S(a,"session"),L(a,"seq"));break;
+                case "outputReceived":ReceiveTerminalOutput(S(a,"session"),L(a,"seq"));break;
+                case "resize": {string key=S(a,"session");int cols=ConPty.ClampCols(N(a,"cols",80)),rows=ConPty.ClampRows(N(a,"rows",24));GetSession(key).Resize(cols,rows);sessionSizes[key]=new[]{cols,rows};break;}
+                case "closeTerminal": {string key=S(a,"session");ConPty terminal;if(sessions.TryRemove(key,out terminal)){ForgetTerminalOutput(key);string removedProfile;sessionProfiles.TryRemove(key,out removedProfile);string removedResume;sessionResumeIds.TryRemove(key,out removedResume);string removedName;sessionNames.TryRemove(key,out removedName);string removedProject;sessionProjects.TryRemove(key,out removedProject);OutputRing ring;if(outputRings.TryRemove(key,out ring))ring.Close();terminal.Dispose();}break;}
                 case "deleteSavedSession": result=await Task.Run(()=>DeleteSavedSession(S(a,"provider"),S(a,"id"),S(a,"cwd",initialFolder),S(a,"allWorkspaces")=="True"));break;
                 case "terminalName": {string key=S(a,"session"),name=S(a,"name");if(sessions.ContainsKey(key))sessionNames[key]=TerminalName(name,"terminal");break;}
                 case "metrics":result=await Task.Run(()=>Measure());break;
@@ -331,7 +333,7 @@ namespace Orbit {
         }
         private ConPty GetSession(string id) {ConPty value;if(!sessions.TryGetValue(id,out value))throw new InvalidOperationException("종료된 터미널입니다.");return value;}
         private static int RemoteTestPort(string[] args) { string value=args.FirstOrDefault(x=>x.StartsWith("--remote-test-port=",StringComparison.OrdinalIgnoreCase));int port;if(value!=null&&Int32.TryParse(value.Substring("--remote-test-port=".Length),out port)&&port>=1024&&port<=65535)return port;return 49821; }
-        private long RecordOutput(string id,string data) { OutputRing ring;if(!outputRings.TryGetValue(id,out ring))return 0;return ring.Advance(data,remote.Enabled); }
+        private long RecordOutput(string id,string data,long sequence) { OutputRing ring;if(!outputRings.TryGetValue(id,out ring))return 0;return ring.Advance(data,remote.Enabled,sequence); }
         private void RefreshRemoteOrigin() {var values=json.Deserialize<Dictionary<string,object>>(json.Serialize(tailscale.Status()));string ts=values.ContainsKey("url")?Convert.ToString(values["url"]):null;remote.SetPublicOrigin(!String.IsNullOrEmpty(ts)?ts:(!String.IsNullOrEmpty(tunnel.Url)?tunnel.Url:configuredRemoteOrigin));if(remote.Enabled&&!String.IsNullOrEmpty(remote.PublicOrigin))account.PushUrl(remote.OriginUrl());}
         private object RemoteDiagnostic() {var ts=tailscale.Status();var cf=tunnel.Status();string current=remote.PublicOrigin;bool checkedUrl=false,reachable=false;string error=null;Uri uri;if(Uri.TryCreate(current,UriKind.Absolute,out uri)&&uri.Scheme=="https"){checkedUrl=true;try{var request=(System.Net.HttpWebRequest)System.Net.WebRequest.Create(new Uri(uri.GetLeftPart(UriPartial.Authority)+"/mobile.html"));request.Method="GET";request.Timeout=3000;request.ReadWriteTimeout=3000;request.AllowAutoRedirect=false;using(var response=(System.Net.HttpWebResponse)request.GetResponse())reachable=(int)response.StatusCode>=200&&(int)response.StatusCode<400;}catch(Exception ex){error=ex.Message;}}return new {tailscale=ts,tunnel=cf,checkedUrl=checkedUrl,reachable=reachable,error=error};}
         private static void OpenTailscaleSetup(string value) {Uri uri;if(!Uri.TryCreate(value,UriKind.Absolute,out uri)||uri.Scheme!="https"||!(String.Equals(uri.Host,"tailscale.com",StringComparison.OrdinalIgnoreCase)||uri.Host.EndsWith(".tailscale.com",StringComparison.OrdinalIgnoreCase)))throw new InvalidOperationException("허용되지 않은 Tailscale 주소입니다.");Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});}

@@ -37,6 +37,7 @@ if (!(Test-Path -LiteralPath $cloudflaredLicense)) {
     Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/cloudflare/cloudflared/$cloudflaredVersion/LICENSE" -OutFile $cloudflaredLicense
 }
 New-Item -ItemType Directory -Force -Path 'release\Orbit\web' | Out-Null
+& "$PSScriptRoot\prepare-conpty.ps1" -OutputDirectory 'release\Orbit'
 Copy-Item -Path 'dist\*' -Destination 'release\Orbit\web' -Recurse -Force
 Copy-Item -LiteralPath "$sdk\lib\net462\Microsoft.Web.WebView2.Core.dll","$sdk\lib\net462\Microsoft.Web.WebView2.WinForms.dll","$sdk\runtimes\win-x64\native\WebView2Loader.dll" -Destination 'release\Orbit' -Force
 $sources = Get-ChildItem -LiteralPath native -Filter '*.cs' | ForEach-Object FullName
