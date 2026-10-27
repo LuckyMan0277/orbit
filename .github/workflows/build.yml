@@ -64,6 +64,15 @@ jobs:
           name: Orbit-Setup
           path: release/Orbit-Setup.exe
 
+      - name: Publish terminal preview prerelease
+        if: github.ref == 'refs/heads/codex/terminal-first'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'terminal-preview-${{ github.sha }}'
+          gh release create $tag release/Orbit-Setup.exe --target '${{ github.sha }}' --prerelease --latest=false --title 'Orbit terminal preview' --notes '실험용 단일 터미널 빌드입니다. 실제 Windows GUI 검증은 아직 수행하지 않았습니다. Experimental single-terminal build; native Windows GUI testing has not been performed.'
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
