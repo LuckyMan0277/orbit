@@ -8,18 +8,20 @@ import { extractLinks } from './links.js';
 import { el, toast, confirm } from './ui.js';
 import { prepareTerminalPaste } from './terminal-paste.js';
 import { blocksWorkspaceShortcut } from './workspace-shortcuts.js';
+import { getChangedTerminalSize, TerminalLayout } from './terminal-layout.js';
 
 const terminalTheme = name => name === 'light'
   ? { background: '#fcfbff', foreground: '#30313b', cursor: '#50307c', selectionBackground: '#d8cbed99', black: '#30313b', red: '#b43d57', green: '#2f754c', yellow: '#766016', blue: '#28629a', magenta: '#71499c', cyan: '#287278', white: '#5a5363', brightBlack: '#756d7e', brightRed: '#8f253f', brightGreen: '#1e653c', brightYellow: '#63500d', brightBlue: '#1d548b', brightMagenta: '#5f358f', brightCyan: '#17656d', brightWhite: '#3f3947' }
   : { background: '#15171c', foreground: '#d5d9e2', cursor: '#b8a1ff', selectionBackground: '#7660ae70', black: '#252833', red: '#f38ba8', green: '#a6d7ad', yellow: '#e6ca8b', blue: '#8db8ee', magenta: '#c8aff0', cyan: '#93d6db', white: '#e4e7ee', brightBlack: '#7f8798' };
 export class TerminalPane {
-  constructor({ id, profile, cwd, resumeId, name, settings, openLink, onExit, onFocus, attach, secrets, onOutput, workspaceShortcuts = true }) {
+  constructor({ id, profile, cwd, resumeId, name, settings, openLink, onExit, onFocus, attach, secrets, onOutput, workspaceShortcuts = true, shortcutHandler, layoutMode = 'legacy', scrollback, lineHeight = 1.24 }) {
     // secrets: secret names only (undefined = every stored secret); the host resolves the values.
     this.id = id; this.cwd = cwd; this.profile = profile; this.resumeId = resumeId || ''; this.secrets = secrets; this.name = name || profile; this.closed = false; this.exited = false; this.started = false; this.outputCount = 0;
     // Attached: a view of a terminal the host opened. It keeps the host terminal's size (never resizes it) and starts from the host's snapshot.
     this.attach = attach || null; this.attached = !!attach;
     this.element = el('div', attach ? 'terminal-pane attached' : 'terminal-pane');
-    this.term = new Terminal({ fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", monospace', fontSize: settings.fontSize, lineHeight: 1.24, scrollback: settings.lowPower ? 500 : 2000, cursorBlink: false, allowProposedApi: false, convertEol: false, minimumContrastRatio: settings.theme === 'light' ? 4.5 : 1, theme: terminalTheme(settings.theme), linkHandler: { activate: (e, text) => openLink(text, this.cwd), allowNonHttpProtocols: true } });
+    this.layoutMode = layoutMode;
+    this.term = new Terminal({ fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", monospace', fontSize: settings.fontSize, lineHeight, scrollback: scrollback ?? (settings.lowPower ? 500 : 2000), cursorBlink: false, allowProposedApi: false, convertEol: false, minimumContrastRatio: settings.theme === 'light' ? 4.5 : 1, theme: terminalTheme(settings.theme), linkHandler: { activate: (e, text) => openLink(text, this.cwd), allowNonHttpProtocols: true } });
     this.fit = new FitAddon(); this.search = new SearchAddon(); this.serialize = new SerializeAddon(); this.term.loadAddon(this.fit); this.term.loadAddon(this.search); this.term.loadAddon(this.serialize);
     this.term.open(this.element);
     this.term.onData(data => { if (this.started && !this.exited) notify('write', { session: this.id, data }); });
@@ -42,6 +44,7 @@ export class TerminalPane {
       if (event.ctrlKey && !event.altKey && (key === 'KeyC' && event.shiftKey || key === 'Insert' && !event.shiftKey)) { this.copySelection(true); return false; }
       // Returning false lets the browser fire its paste event, which the listener above handles once.
       if (event.ctrlKey && !event.altKey && key === 'KeyV' || event.shiftKey && !event.ctrlKey && key === 'Insert') return false;
+      if (shortcutHandler?.(event)) return false;
       // Keep workspace shortcuts from becoming control characters in the CLI.
       if (blocksWorkspaceShortcut(event, workspaceShortcuts)) return false;
       return true;
@@ -78,8 +81,12 @@ export class TerminalPane {
     });
     this.unsnapshot = on('remoteSnapshot', data => { if(data.session === this.id) this.term.write('', () => notify('remoteSnapshot', { session: this.id, request:data.request, data: this.serialize.serialize(), seq: this.lastProcessedSeq || 0, cols: this.term.cols, rows: this.term.rows })); });
     this.unexit = on('exit', data => { if (data.session === this.id && !this.closed) { this.exited = true; this.term.write(`\r\n\x1b[90m[프로세스 종료 · 코드 ${data.code}]\x1b[0m\r\n`); onExit(data.code); } });
-    this.observer = new ResizeObserver(() => { if (!this.attached && this.element.clientWidth && this.element.clientHeight) this.fit.fit(); });
-    this.observer.observe(this.element);
+    if (layoutMode === 'managed' && !this.attached) {
+      this.layout = new TerminalLayout({ element: this.element, fit: this.fit, term: this.term });
+    } else {
+      this.observer = new ResizeObserver(() => { if (!this.attached && this.element.clientWidth && this.element.clientHeight) this.fit.fit(); });
+      this.observer.observe(this.element);
+    }
   }
   async start() {
     if (this.attached) {
@@ -87,22 +94,31 @@ export class TerminalPane {
       this.term.resize(Math.max(10, cols || 80), Math.max(3, rows || 24));
       this.lastProcessedSeq = seq || 0; this.started = true;
       if (data) await new Promise(resolve => this.term.write(data, resolve));
-      return;
+      return true;
     }
-    this.fit.fit();
-    const result = await call('createTerminal', { session: this.id, cwd: this.cwd, profile: this.profile, resumeId: this.resumeId, name: this.name, ...(this.secrets ? { secrets: this.secrets } : {}), cols: this.term.cols, rows: this.term.rows });
-    this.started = true; this.pid = result.pid; this.focus();
+    if (this.layout) {
+      if (!await this.layout.ready() || this.closed) throw new Error('터미널 크기를 확인하지 못했습니다. 창 크기를 확인한 뒤 다시 시도해 주세요.');
+    } else this.fit.fit();
+    const initialSize = { cols: this.term.cols, rows: this.term.rows };
+    const result = await call('createTerminal', { session: this.id, cwd: this.cwd, profile: this.profile, resumeId: this.resumeId, name: this.name, ...(this.secrets ? { secrets: this.secrets } : {}), ...initialSize });
+    if (this.closed) { notify('closeTerminal', { session: this.id }); return false; }
+    this.started = true; this.pid = result.pid;
+    const resized = !this.exited && getChangedTerminalSize(initialSize, { cols: this.term.cols, rows: this.term.rows });
+    if (resized) notify('resize', { session: this.id, ...resized });
+    if (!this.layout) this.focus();
+    return true;
   }
-  focus() { requestAnimationFrame(() => { if (!this.closed && this.element.clientWidth) { if (!this.attached) this.fit.fit(); this.term.focus(); } }); }
+  focus() { requestAnimationFrame(() => { if (!this.closed && this.element.clientWidth) { if (!this.attached && !this.layout) this.fit.fit(); this.term.focus(); } }); }
   // Moving the pane in the DOM (session/tab switch, split) resets the scroll area to 0 while xterm still thinks it is scrolled, so the wheel stops scrolling up. Re-sync it once attached.
   syncScroll() {
+    if (this.layoutMode === 'managed') return;
     requestAnimationFrame(() => {
       const viewport = this.element.querySelector('.xterm-viewport'), buffer = this.term.buffer.active;
       if (this.closed || !viewport || !viewport.clientHeight || !buffer.length) return;
       viewport.scrollTop = buffer.viewportY >= buffer.baseY ? viewport.scrollHeight : Math.round(viewport.scrollHeight * buffer.viewportY / buffer.length);
     });
   }
-  configure(settings) { this.term.options.fontSize = settings.fontSize; this.term.options.scrollback = settings.lowPower ? 500 : 2000; this.term.options.minimumContrastRatio = settings.theme === 'light' ? 4.5 : 1; this.term.options.theme = terminalTheme(settings.theme); if (!this.attached) this.fit.fit(); }
+  configure(settings) { this.term.options.fontSize = settings.fontSize; this.term.options.scrollback = settings.lowPower ? 500 : 2000; this.term.options.minimumContrastRatio = settings.theme === 'light' ? 4.5 : 1; this.term.options.theme = terminalTheme(settings.theme); if (this.layout) this.layout.schedule(); else if (!this.attached) this.fit.fit(); }
   copySelection(clear) {
     const text = this.term.getSelection();
     if (!text) return;
@@ -120,5 +136,5 @@ export class TerminalPane {
     if (prepared.collapsed) toast('줄바꿈은 실행되지 않도록 공백으로 붙여넣었습니다.');
     this.focus();
   }
-  dispose() { this.closed = true; this.unsub(); this.unexit(); this.unsnapshot(); this.observer.disconnect(); this.term.dispose(); this.element.remove(); }
+  dispose() { this.closed = true; this.unsub(); this.unexit(); this.unsnapshot(); this.layout?.dispose(); this.observer?.disconnect(); this.term.dispose(); this.element.remove(); }
 }

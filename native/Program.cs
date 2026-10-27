@@ -58,7 +58,8 @@ namespace Orbit {
         private readonly int remoteTestPort;
         private bool dirty, quitting, mobileUiNavigation;
         public MainWindow(string[] args) {
-            Text="Orbit — Terminal";Size=new Size(1120,760);MinimumSize=new Size(720,480);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(19,21,26);FormBorderStyle=FormBorderStyle.None;Padding=new Padding(6);MaximizeBox=true;
+            var workArea=Screen.PrimaryScreen.WorkingArea;
+            Text="Orbit — Terminal";MinimumSize=new Size(Math.Min(640,workArea.Width),Math.Min(400,workArea.Height));Size=new Size(Math.Min(1000,workArea.Width),Math.Min(700,workArea.Height));StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(19,21,26);FormBorderStyle=FormBorderStyle.None;Padding=new Padding(6);MaximizeBox=true;
             using(var iconStream=typeof(Program).Assembly.GetManifestResourceStream("Orbit.Icon")) Icon=new Icon(iconStream);
             chrome=new WindowChrome(this);
             uiTest=args.Contains("--ui-test");remoteTest=args.Contains("--remote-test")||args.Contains("--remote-test-tunnel");remoteTestTunnel=args.Contains("--remote-test-tunnel");remoteTestPort=remoteTest?RemoteTestPort(args):49821;
@@ -175,6 +176,10 @@ namespace Orbit {
                 case "windowMinimize":chrome.Minimize();break;
                 case "windowMaximize":chrome.ToggleMaximize();break;
                 case "windowClose":chrome.CloseWindow();break;
+                case "newWindow": {
+                    string cwd=S(a,"cwd",initialFolder);if(!Directory.Exists(cwd))cwd=initialFolder;
+                    Process.Start(new ProcessStartInfo(Application.ExecutablePath){UseShellExecute=false,WorkingDirectory=cwd});break;
+                }
                 case "dirty":dirty=S(a,"value")=="True";break;
                 case "settings":File.WriteAllText(Path.Combine(dataRoot,"settings.json"),json.Serialize(a));break;
                 case "theme":ApplyHostTheme(S(a,"value"));break;
