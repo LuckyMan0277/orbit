@@ -58,11 +58,8 @@ namespace Orbit {
         private readonly int remoteTestPort;
         private bool dirty, quitting, mobileUiNavigation;
         public MainWindow(string[] args) {
-            Text="Orbit — Agent workspace";Size=new Size(1320,870);MinimumSize=new Size(900,620);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(19,21,26);FormBorderStyle=FormBorderStyle.None;Padding=new Padding(6);MaximizeBox=true;
+            Text="Orbit — Terminal";Size=new Size(1120,760);MinimumSize=new Size(720,480);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(19,21,26);FormBorderStyle=FormBorderStyle.None;Padding=new Padding(6);MaximizeBox=true;
             using(var iconStream=typeof(Program).Assembly.GetManifestResourceStream("Orbit.Icon")) Icon=new Icon(iconStream);
-            // Remote devices depend on this PC staying awake. Keep the system from sleeping
-            // (idle or on battery) for as long as Orbit is running; the display may still turn off.
-            Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS|Win32.ES_SYSTEM_REQUIRED);
             chrome=new WindowChrome(this);
             uiTest=args.Contains("--ui-test");remoteTest=args.Contains("--remote-test")||args.Contains("--remote-test-tunnel");remoteTestTunnel=args.Contains("--remote-test-tunnel");remoteTestPort=remoteTest?RemoteTestPort(args):49821;
             dataRoot=remoteTest ? Path.Combine(TestArtifacts.Root,"remote-test-profile") : uiTest ? Path.Combine(TestArtifacts.Root,"webview-profile") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"OrbitAgentDesktop");
@@ -81,7 +78,7 @@ namespace Orbit {
                     string msg=(dirty?"저장하지 않은 파일 변경 사항이 있습니다.\n":"")+(sessions.Count>0?"실행 중인 터미널과 하위 프로세스가 종료됩니다.\n":"")+"Orbit을 종료할까요?";
                     if(MessageBox.Show(this,msg,"Orbit 종료",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes) {e.Cancel=true;return;}
                 }
-                quitting=true;Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();broker.Stop();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
+                quitting=true;tunnel.Dispose();tailscale.Dispose();account.Dispose();remote.Dispose();broker.Stop();foreach(var session in sessions.Values.ToArray())session.Dispose();sessions.Clear();foreach(var ring in outputRings.Values)ring.Close();outputRings.Clear();
             };
         }
         private async Task Initialize() {

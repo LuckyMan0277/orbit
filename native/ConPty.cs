@@ -34,8 +34,6 @@ namespace Orbit {
         [DllImport("kernel32.dll")] internal static extern bool GetExitCodeProcess(IntPtr process, out uint code);
         [DllImport("kernel32.dll")] internal static extern bool CloseHandle(IntPtr handle);
         [DllImport("user32.dll")] internal static extern bool SetProcessDpiAwarenessContext(IntPtr context);
-        [DllImport("kernel32.dll")] internal static extern uint SetThreadExecutionState(uint flags);
-        internal const uint ES_CONTINUOUS=0x80000000, ES_SYSTEM_REQUIRED=0x00000001;
         // Taskbar flash until the window is brought forward: says "look here" without taking the keyboard focus from what the user is typing.
         [StructLayout(LayoutKind.Sequential)] internal struct FLASHWINFO { public uint size; public IntPtr window; public uint flags, count, timeout; }
         [DllImport("user32.dll")] internal static extern bool FlashWindowEx(ref FLASHWINFO info);

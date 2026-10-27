@@ -7,12 +7,13 @@ import { call, notify, on } from './bridge.js';
 import { extractLinks } from './links.js';
 import { el, toast, confirm } from './ui.js';
 import { prepareTerminalPaste } from './terminal-paste.js';
+import { blocksWorkspaceShortcut } from './workspace-shortcuts.js';
 
 const terminalTheme = name => name === 'light'
   ? { background: '#fcfbff', foreground: '#30313b', cursor: '#50307c', selectionBackground: '#d8cbed99', black: '#30313b', red: '#b43d57', green: '#2f754c', yellow: '#766016', blue: '#28629a', magenta: '#71499c', cyan: '#287278', white: '#5a5363', brightBlack: '#756d7e', brightRed: '#8f253f', brightGreen: '#1e653c', brightYellow: '#63500d', brightBlue: '#1d548b', brightMagenta: '#5f358f', brightCyan: '#17656d', brightWhite: '#3f3947' }
   : { background: '#15171c', foreground: '#d5d9e2', cursor: '#b8a1ff', selectionBackground: '#7660ae70', black: '#252833', red: '#f38ba8', green: '#a6d7ad', yellow: '#e6ca8b', blue: '#8db8ee', magenta: '#c8aff0', cyan: '#93d6db', white: '#e4e7ee', brightBlack: '#7f8798' };
 export class TerminalPane {
-  constructor({ id, profile, cwd, resumeId, name, settings, openLink, onExit, onFocus, attach, secrets, onOutput }) {
+  constructor({ id, profile, cwd, resumeId, name, settings, openLink, onExit, onFocus, attach, secrets, onOutput, workspaceShortcuts = true }) {
     // secrets: secret names only (undefined = every stored secret); the host resolves the values.
     this.id = id; this.cwd = cwd; this.profile = profile; this.resumeId = resumeId || ''; this.secrets = secrets; this.name = name || profile; this.closed = false; this.exited = false; this.started = false; this.outputCount = 0;
     // Attached: a view of a terminal the host opened. It keeps the host terminal's size (never resizes it) and starts from the host's snapshot.
@@ -42,8 +43,7 @@ export class TerminalPane {
       // Returning false lets the browser fire its paste event, which the listener above handles once.
       if (event.ctrlKey && !event.altKey && key === 'KeyV' || event.shiftKey && !event.ctrlKey && key === 'Insert') return false;
       // Keep workspace shortcuts from becoming control characters in the CLI.
-      if (event.ctrlKey && ['KeyO', 'KeyS', 'KeyK', 'KeyP', 'KeyB'].includes(event.code)) return false;
-      if (event.ctrlKey && event.shiftKey && ['KeyT','KeyW','KeyD','KeyF'].includes(event.code)) return false;
+      if (blocksWorkspaceShortcut(event, workspaceShortcuts)) return false;
       return true;
     });
     this.term.registerLinkProvider({ provideLinks: (lineNumber, callback) => {
