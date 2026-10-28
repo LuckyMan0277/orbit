@@ -71,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = 'terminal-preview-${{ github.sha }}'
-          gh release create $tag release/Orbit-Setup.exe --target '${{ github.sha }}' --prerelease --latest=false --title 'Orbit terminal preview' --notes '실험용 단일 터미널 빌드입니다. 실제 Windows GUI 검증은 아직 수행하지 않았습니다. Experimental single-terminal build; native Windows GUI testing has not been performed.'
+          gh release create $tag release/Orbit-Setup.exe --target '${{ github.sha }}' --prerelease --latest=false --title 'Orbit terminal preview' --notes '실험용 탭형 터미널 빌드입니다. 탭 드래그로 화면 분할과 도킹을 시험할 수 있습니다. 실제 Windows GUI 검증은 아직 수행하지 않았습니다. Experimental tabbed terminal build with drag docking and splits. Native Windows GUI testing has not been performed.'
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
