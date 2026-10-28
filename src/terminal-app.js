@@ -38,25 +38,31 @@ const menu = document.querySelector('#terminal-menu');
 const panes = new Map();
 const paneSlots = new Map();
 const groupHeaders = new Map();
+const groupBaseViews = new Map();
 const groupDropZones = new Map();
 const splitters = new Map();
 const settings = { fontSize: 14, lowPower: false, theme: 'dark' };
 let layoutRoot = null;
 let activePaneId = '';
+let activeGroupId = '';
 let folder = '';
 let initialized = false;
-let emptyState = null;
 let terminalNumber = 0;
 
 const setStatus = text => { status.textContent = text; };
 const activePane = () => panes.get(activePaneId) || null;
+const activeGroup = () => findGroup(layoutRoot, activeGroupId) || groupForTab(layoutRoot, activePaneId);
 function groupForTab(root, tabId) {
   if (!root) return null;
   if (root.type === 'group') return root.tabs.includes(tabId) ? root : null;
   return groupForTab(root.first, tabId) || groupForTab(root.second, tabId);
 }
 const closeMenu = () => { menu.open = false; };
-const focusActivePane = () => activePane()?.pane?.term.focus();
+function focusActivePane() {
+  const pane = activePane()?.pane;
+  if (pane) pane.term.focus();
+  else groupBaseViews.get(activeGroupId)?.focus();
+}
 const newTerminalName = profile => `${profile === 'cmd' ? '명령 프롬프트' : 'PowerShell'} ${++terminalNumber}`;
 
 document.querySelector('#window-minimize').onclick = () => notify('windowMinimize');
@@ -88,29 +94,18 @@ window.addEventListener('blur', clearDragState);
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearDragState(); });
 
 function browserSample() {
-  terminalHost.innerHTML = '<div class="preview-terminal"><div><span class="preview-prompt">PS C:\\Workspace&gt;</span> Get-Location</div><pre>Path\n----\nC:\\Workspace</pre><div><span class="preview-prompt">PS C:\\Workspace&gt;</span> <span class="preview-cursor"></span></div><p>Browser preview · sample terminal output. Shell commands run in the Windows desktop app.</p></div>';
-  setStatus('미리보기');
+  layoutRoot = { type: 'group', id: crypto.randomUUID(), tabs: [], activeTabId: '' };
+  activeGroupId = layoutRoot.id;
+  renderLayout();
+  setStatus('터미널 준비');
   document.querySelector('.terminal-menu').hidden = true;
 }
 
 function renderLayout() {
   if (!layoutRoot) {
-    for (const slot of paneSlots.values()) slot.remove();
-    for (const header of groupHeaders.values()) header.remove();
-    for (const zone of groupDropZones.values()) zone.remove();
-    for (const splitter of splitters.values()) splitter.remove();
-    paneSlots.clear(); groupHeaders.clear(); groupDropZones.clear(); splitters.clear();
-    if (!emptyState) {
-      emptyState = document.createElement('div');
-      emptyState.className = 'terminal-empty';
-      emptyState.innerHTML = '<p>열린 터미널이 없습니다.</p><div><button type="button" data-empty-shell="powershell">PowerShell 열기</button><button type="button" data-empty-shell="cmd">명령 프롬프트 열기</button></div>';
-      emptyState.querySelectorAll('[data-empty-shell]').forEach(button => button.addEventListener('click', () => createFirstPane(button.dataset.emptyShell)));
-    }
-    terminalHost.append(emptyState);
-    setStatus('터미널 없음');
-    return;
+    layoutRoot = { type: 'group', id: crypto.randomUUID(), tabs: [], activeTabId: '' };
+    activeGroupId = layoutRoot.id;
   }
-  emptyState?.remove();
   const leaves = [], splitNodes = [];
   collectLayout(layoutRoot, { x: 0, y: 0, width: 1, height: 1 }, leaves, splitNodes);
   const activeIds = new Set(tabIds(layoutRoot));
@@ -118,20 +113,24 @@ function renderLayout() {
   const activeSplits = new Set(splitNodes.map(item => item.node.id));
   for (const [id, slot] of paneSlots) if (!activeIds.has(id)) { slot.remove(); paneSlots.delete(id); }
   for (const [id, header] of groupHeaders) if (!activeGroups.has(id)) { header.remove(); groupHeaders.delete(id); }
+  for (const [id, view] of groupBaseViews) if (!activeGroups.has(id)) { view.remove(); groupBaseViews.delete(id); }
   for (const [id, zone] of groupDropZones) if (!activeGroups.has(id)) { zone.remove(); groupDropZones.delete(id); }
   for (const [id, splitter] of splitters) if (!activeSplits.has(id)) { splitter.remove(); splitters.delete(id); }
   for (const { node: group, rect } of leaves) {
     const zone = getGroupDropZone(group.id);
     zone.style.left = `${rect.x * 100}%`; zone.style.top = `${rect.y * 100}%`;
     zone.style.width = `${rect.width * 100}%`; zone.style.height = `${rect.height * 100}%`;
+    zone.dataset.headerHeight = String(group.tabs.length ? 30 : 0);
     const header = getGroupHeader(group.id);
     const previousScrollLeft = Number(header.querySelector('.terminal-tab-strip')?.scrollLeft || 0);
     header.style.left = `${rect.x * 100}%`; header.style.top = `${rect.y * 100}%`;
     header.style.width = `${rect.width * 100}%`;
     header.setAttribute('role', 'group'); header.setAttribute('aria-label', '터미널 그룹');
-    header.classList.toggle('focused', group.id === groupForTab(layoutRoot, activePaneId)?.id);
+    header.classList.toggle('focused', group.id === activeGroupId);
+    header.hidden = group.tabs.length === 0;
     header.replaceChildren();
     header.dataset.groupId = group.id;
+    header.onpointerdown = event => { if (!event.target.closest('.terminal-tab')) activateGroup(group.id); };
     const tabStrip = document.createElement('div');
     tabStrip.className = 'terminal-tab-strip'; tabStrip.setAttribute('role', 'tablist'); tabStrip.setAttribute('aria-label', '터미널 탭');
     tabStrip.addEventListener('wheel', event => {
@@ -176,7 +175,12 @@ function renderLayout() {
     header.ondragleave = event => { if (!header.contains(event.relatedTarget)) { const targetZone = groupDropZones.get(group.id); targetZone.classList.remove('visible'); delete targetZone.dataset.placement; } };
     header.ondrop = event => { event.preventDefault(); event.stopPropagation(); const data = readDrag(event); if (data) dockDragged(data, group.id, 'center', group.tabs.length); };
     if (!group.tabs.length) {
-      const empty = document.createElement('button'); empty.type = 'button'; empty.className = 'empty-group-add'; empty.textContent = '+'; empty.title = '이 영역에 터미널 추가'; empty.onclick = () => createTab(group.id); header.append(empty);
+      const view = getGroupBaseView(group.id);
+      view.style.left = `${rect.x * 100}%`; view.style.top = `${rect.y * 100}%`;
+      view.style.width = `${rect.width * 100}%`; view.style.height = `${rect.height * 100}%`;
+      view.hidden = false; view.classList.toggle('focused', group.id === activeGroupId);
+    } else {
+      const view = groupBaseViews.get(group.id); if (view) view.hidden = true;
     }
     revealTab(tabStrip, tabStrip.querySelector(`[data-tab-id="${group.activeTabId}"]`));
     for (const id of group.tabs) {
@@ -244,6 +248,25 @@ function getGroupHeader(id) {
   return header;
 }
 
+function getGroupBaseView(id) {
+  let view = groupBaseViews.get(id);
+  if (view) return view;
+  view = document.createElement('div');
+  view.className = 'group-base-view'; view.dataset.groupId = id; view.tabIndex = 0;
+  view.setAttribute('role', 'region'); view.setAttribute('aria-label', '새 터미널 열기');
+  view.innerHTML = '<div class="base-view-actions"><button type="button" data-profile="powershell" aria-label="PowerShell 열기">새 터미널</button><button type="button" data-profile="cmd" aria-label="명령 프롬프트 열기" title="명령 프롬프트">CMD</button></div>';
+  view.addEventListener('pointerdown', () => activateGroup(id));
+  view.addEventListener('click', event => {
+    const button = event.target.closest('[data-profile]');
+    if (!button) { activateGroup(id); return; }
+    event.stopPropagation();
+    if (isDesktop) void createTab(id, button.dataset.profile);
+  });
+  view.querySelectorAll('button').forEach(button => { button.disabled = !isDesktop; });
+  groupBaseViews.set(id, view); terminalHost.append(view);
+  return view;
+}
+
 function getGroupDropZone(id) {
   let zone = groupDropZones.get(id);
   if (zone) return zone;
@@ -252,7 +275,7 @@ function getGroupDropZone(id) {
     if (!event.dataTransfer.types.includes('application/x-orbit-terminal-tab')) return;
     event.preventDefault(); event.dataTransfer.dropEffect = 'move';
     const bounds = zone.getBoundingClientRect();
-    const placement = getDropPlacement(bounds, { x: event.clientX, y: event.clientY });
+    const placement = getDropPlacement(bounds, { x: event.clientX, y: event.clientY }, Number(zone.dataset.headerHeight));
     zone.dataset.placement = placement;
     zone.classList.add('visible');
   };
@@ -260,7 +283,7 @@ function getGroupDropZone(id) {
   zone.ondrop = event => {
     event.preventDefault();
     const bounds = zone.getBoundingClientRect();
-    const data = readDrag(event), placement = getDropPlacement(bounds, { x: event.clientX, y: event.clientY });
+    const data = readDrag(event), placement = getDropPlacement(bounds, { x: event.clientX, y: event.clientY }, Number(zone.dataset.headerHeight));
     zone.classList.remove('visible'); delete zone.dataset.placement;
     terminalHost.classList.remove('dragging-tabs');
     if (data) dockDragged(data, id, placement);
@@ -327,6 +350,7 @@ function findSplitRect(node, id, rect) {
 function activateSession(groupId, id) {
   if (!panes.has(id) || !groupId) return;
   layoutRoot = activateTab(layoutRoot, groupId, id);
+  activeGroupId = groupId;
   activePaneId = id;
   const visibleTabs = new Set(groupIds(layoutRoot).map(groupId => findGroup(layoutRoot, groupId)?.activeTabId).filter(Boolean));
   document.querySelectorAll('.pane-slot').forEach(slot => {
@@ -342,10 +366,27 @@ function activateSession(groupId, id) {
     tab.classList.toggle('active', selected); tab.tabIndex = selected ? 0 : -1; tab.setAttribute('aria-selected', String(selected));
   });
   document.querySelectorAll('.terminal-group-header').forEach(header => header.classList.toggle('focused', header.dataset.groupId === focusedGroupId));
+  document.querySelectorAll('.group-base-view').forEach(view => view.classList.remove('focused'));
   const activeTabElement = document.querySelector(`.terminal-tab[data-tab-id="${id}"]`);
   revealTab(activeTabElement?.closest('.terminal-tab-strip'), activeTabElement);
   updateActiveStatus();
   focusActivePane();
+}
+
+function activateGroup(groupId) {
+  const group = findGroup(layoutRoot, groupId);
+  if (!group) return;
+  activeGroupId = groupId;
+  if (group.activeTabId && panes.has(group.activeTabId)) {
+    activateSession(groupId, group.activeTabId);
+    return;
+  }
+  activePaneId = '';
+  document.querySelectorAll('.pane-slot').forEach(slot => slot.classList.remove('active'));
+  document.querySelectorAll('.terminal-group-header').forEach(header => header.classList.toggle('focused', header.dataset.groupId === groupId));
+  document.querySelectorAll('.group-base-view').forEach(view => view.classList.toggle('focused', view.dataset.groupId === groupId));
+  updateActiveStatus();
+  groupBaseViews.get(groupId)?.focus();
 }
 
 function revealTab(strip, tab) {
@@ -357,31 +398,30 @@ function revealTab(strip, tab) {
 
 function updateActiveStatus() {
   const record = activePane();
-  if (!record) { setStatus('터미널 없음'); return; }
+  if (!record) { setStatus('터미널 준비'); return; }
   const profile = record.profile === 'cmd' ? '명령 프롬프트' : 'PowerShell';
   setStatus(record.starting ? `${profile} · 시작 중` : record.error ? `${profile} · 시작 실패` : record.pane?.exited ? `${profile} · 종료` : `${profile} · 실행 중`);
 }
 
 async function createFirstPane(profile = 'powershell') {
   if (!isDesktop) return;
-  const id = crypto.randomUUID();
-  const groupId = crypto.randomUUID();
-  layoutRoot = { type: 'group', id: groupId, tabs: [id], activeTabId: id };
-  activePaneId = id;
-  panes.set(id, { profile, name: newTerminalName(profile), cwd: folder, starting: true, pane: null, error: '' });
-  renderLayout();
-  await launchPane(id, profile);
+  if (!layoutRoot) layoutRoot = { type: 'group', id: crypto.randomUUID(), tabs: [], activeTabId: '' };
+  activeGroupId ||= groupIds(layoutRoot)[0] || '';
+  if (!activeGroupId) return;
+  await createTab(activeGroupId, profile);
 }
 
-async function createTab(groupId) {
+async function createTab(groupId, requestedProfile) {
   if (!isDesktop) return;
   if (panes.size >= 8) return showLimitError();
-  groupId ||= groupForTab(layoutRoot, activePaneId)?.id || groupIds(layoutRoot).find(id => !findGroup(layoutRoot, id)?.tabs.length);
+  groupId ||= activeGroupId || groupForTab(layoutRoot, activePaneId)?.id || groupIds(layoutRoot).find(id => !findGroup(layoutRoot, id)?.tabs.length);
   if (!layoutRoot || !groupId) return createFirstPane('powershell');
+  if (!findGroup(layoutRoot, groupId)) return;
   const id = crypto.randomUUID();
   const previous = activePane();
-  const profile = previous?.profile || 'powershell';
+  const profile = requestedProfile || previous?.profile || 'powershell';
   layoutRoot = addTab(layoutRoot, groupId, id);
+  activeGroupId = groupId;
   activePaneId = id;
   panes.set(id, { profile, name: newTerminalName(profile), cwd: previous?.cwd || folder, starting: true, pane: null, error: '' });
   renderLayout();
@@ -391,14 +431,26 @@ async function createTab(groupId) {
 
 async function splitActive(direction) {
   if (!layoutRoot) return createFirstPane('powershell');
+  const group = activeGroup();
+  if (!group) return createFirstPane('powershell');
+  if (!group.tabs.length) {
+    const newGroupId = crypto.randomUUID();
+    layoutRoot = splitGroup(layoutRoot, group.id, newGroupId, '', direction, crypto.randomUUID());
+    activeGroupId = newGroupId;
+    activePaneId = '';
+    renderLayout();
+    focusActivePane();
+    return;
+  }
   if (panes.size >= 8) return showLimitError();
   const id = crypto.randomUUID();
   const previous = activePane();
   const profile = previous?.profile || 'powershell';
-  const group = groupForTab(layoutRoot, activePaneId);
-  const next = splitGroup(layoutRoot, group?.id, crypto.randomUUID(), id, direction, crypto.randomUUID());
+  const newGroupId = crypto.randomUUID();
+  const next = splitGroup(layoutRoot, group.id, newGroupId, id, direction, crypto.randomUUID());
   if (next === layoutRoot) return;
   layoutRoot = next;
+  activeGroupId = newGroupId;
   activePaneId = id;
   panes.set(id, { profile, name: newTerminalName(profile), cwd: folder, starting: true, pane: null, error: '' });
   renderLayout();
@@ -469,16 +521,16 @@ function closeTab(id) {
   if (record?.pane?.started && !record.pane.exited) notify('closeTerminal', { session: record.pane.id });
   record?.pane?.dispose();
   panes.delete(id);
-  layoutRoot = removeTab(layoutRoot, id);
+  const preserveRoot = layoutRoot?.type === 'group' ? oldGroup?.id : '';
+  layoutRoot = removeTab(layoutRoot, id, preserveRoot);
+  if (!layoutRoot) {
+    layoutRoot = { type: 'group', id: oldGroup?.id || crypto.randomUUID(), tabs: [], activeTabId: '' };
+  }
   if (wasActive) {
     const surviving = oldGroup && findGroup(layoutRoot, oldGroup.id);
-    activePaneId = surviving?.activeTabId || '';
-    if (!activePaneId) {
-      for (const groupId of groupIds(layoutRoot)) {
-        const candidate = findGroup(layoutRoot, groupId)?.activeTabId;
-        if (candidate) { activePaneId = candidate; break; }
-      }
-    }
+    const fallback = surviving || groupIds(layoutRoot).map(groupId => findGroup(layoutRoot, groupId)).find(item => item?.activeTabId) || findGroup(layoutRoot, groupIds(layoutRoot)[0]);
+    activeGroupId = fallback?.id || '';
+    activePaneId = fallback?.activeTabId || '';
   }
   errorBox.hidden = true;
   renderLayout();
@@ -505,7 +557,7 @@ function dockDragged(data, targetGroupId, placement, index) {
     });
   } else layoutRoot = dockTab(layoutRoot, data.groupId, data.tabId, targetGroupId, placement, { groupId: crypto.randomUUID(), splitId: crypto.randomUUID() });
   const group = groupForTab(layoutRoot, data.tabId);
-  if (group) { layoutRoot = activateTab(layoutRoot, group.id, data.tabId); activePaneId = data.tabId; }
+  if (group) { layoutRoot = activateTab(layoutRoot, group.id, data.tabId); activeGroupId = group.id; activePaneId = data.tabId; }
   renderLayout(); focusActivePane();
 }
 
@@ -527,7 +579,7 @@ function handleShortcut(event) {
   }
   if (event.ctrlKey && !event.altKey && event.key === 'Tab') {
     event.preventDefault(); event.stopImmediatePropagation();
-    const group = groupForTab(layoutRoot, activePaneId);
+    const group = activeGroup();
     if (group?.tabs.length > 1) {
       const current = group.tabs.indexOf(activePaneId), delta = event.shiftKey ? -1 : 1;
       const next = group.tabs[(current + delta + group.tabs.length) % group.tabs.length];
@@ -552,7 +604,10 @@ async function initialize() {
     folder = typeof data.folder === 'string' ? data.folder : '';
     initialized = true;
     document.title = 'Orbit · Terminal';
-    await createFirstPane('powershell');
+    layoutRoot = { type: 'group', id: crypto.randomUUID(), tabs: [], activeTabId: '' };
+    activeGroupId = layoutRoot.id;
+    renderLayout();
+    focusActivePane();
   } catch (error) {
     errorBox.textContent = `Orbit을 초기화하지 못했습니다. ${error.message}`;
     errorBox.hidden = false;
@@ -573,7 +628,7 @@ function paneDiagnostics(id, record) {
 const treeSnapshot = node => !node ? null : node.type === 'group'
   ? { type: 'group', id: node.id, tabs: [...node.tabs], activeTabId: node.activeTabId }
   : { type: 'split', id: node.id, direction: node.direction, ratio: node.ratio, first: treeSnapshot(node.first), second: treeSnapshot(node.second) };
-window.orbitDiagnostics = () => ({ ready: initialized && !!activePane()?.pane?.started, windowControls: 3, activePaneId, profile: activePane()?.profile || '', cwd: activePane()?.cwd || folder, cols: activePane()?.pane?.term.cols || 0, rows: activePane()?.pane?.term.rows || 0, sessions: [...panes].map(([id, record]) => paneDiagnostics(id, record)) });
+window.orbitDiagnostics = () => ({ ready: initialized, windowControls: 3, activePaneId, activeGroupId, profile: activePane()?.profile || '', cwd: activePane()?.cwd || folder, cols: activePane()?.pane?.term.cols || 0, rows: activePane()?.pane?.term.rows || 0, sessions: [...panes].map(([id, record]) => paneDiagnostics(id, record)) });
 window.orbitUiTest = {
   startCmd: () => restartActive('cmd'),
   startPowerShell: () => restartActive('powershell'),
@@ -588,8 +643,9 @@ window.orbitUiTest = {
     const current = selected?.pane;
     const buffer = current?.term.buffer.active;
     return {
-      ready: !!current?.started, started: !!current?.started, exited: !!current?.exited,
-      activePaneId, cols: current?.term.cols || 0, rows: current?.term.rows || 0,
+      initialized, activeGroupId, activePaneId,
+      ready: initialized, started: !!current?.started, exited: !!current?.exited,
+      cols: current?.term.cols || 0, rows: current?.term.rows || 0,
       buffer: buffer ? { baseY: buffer.baseY, viewportY: buffer.viewportY, length: buffer.length, type: buffer.type } : { baseY: 0, viewportY: 0, length: 0, type: '' },
       layout: treeSnapshot(layoutRoot), sessions: [...panes].map(([id, record]) => paneDiagnostics(id, record)),
       output: current ? Array.from({ length: buffer.length }, (_, i) => buffer.getLine(i)?.translateToString(true) || '').join('\n') : '',

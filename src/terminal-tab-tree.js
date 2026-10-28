@@ -47,15 +47,15 @@ export function reorderTab(root, groupId, tabId, index) {
   });
 }
 
-export function removeTab(root, tabId) {
+export function removeTab(root, tabId, preserveEmptyGroupId = '') {
   if (!root) return null;
   if (root.type === 'group') {
     if (!root.tabs.includes(tabId)) return root;
     const tabs = root.tabs.filter(id => id !== tabId);
-    if (!tabs.length) return null;
-    return { ...root, tabs, activeTabId: root.activeTabId === tabId ? tabs[Math.min(root.tabs.indexOf(tabId), tabs.length - 1)] : root.activeTabId };
+    if (!tabs.length && root.id !== preserveEmptyGroupId) return null;
+    return { ...root, tabs, activeTabId: root.activeTabId === tabId ? tabs[Math.min(root.tabs.indexOf(tabId), tabs.length - 1)] || '' : root.activeTabId };
   }
-  const first = removeTab(root.first, tabId), second = removeTab(root.second, tabId);
+  const first = removeTab(root.first, tabId, preserveEmptyGroupId), second = removeTab(root.second, tabId, preserveEmptyGroupId);
   if (!first) return second;
   if (!second) return first;
   return first === root.first && second === root.second ? root : { ...root, first, second };
@@ -89,8 +89,9 @@ export function dockTab(root, sourceGroupId, tabId, targetGroupId, placement, id
   }
   const directions = { left: ['row', 'before'], right: ['row', 'after'], top: ['column', 'before'], bottom: ['column', 'after'] };
   const dock = directions[placement];
-  if (!dock || sourceGroupId === targetGroupId && source.tabs.length === 1) return root;
-  const removed = removeTab(root, tabId);
+  if (!dock) return root;
+  const preserveSource = sourceGroupId === targetGroupId && source.tabs.length === 1 ? sourceGroupId : '';
+  const removed = removeTab(root, tabId, preserveSource);
   const survivingTarget = findGroup(removed, targetGroupId);
   if (!survivingTarget) return root;
   return splitGroup(removed, targetGroupId, ids.groupId, tabId, dock[0], ids.splitId, dock[1]);
@@ -100,11 +101,11 @@ export function splitCorner(root, sourceGroupId, targetGroupId, tabId, corner, i
   const source = findGroup(root, sourceGroupId);
   const target = findGroup(root, targetGroupId);
   if (!source || !source.tabs.includes(tabId) || !target || !['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(corner)) return root;
-  if (sourceGroupId === targetGroupId && source.tabs.length === 1) return root;
   const emptyId = ids.emptyGroupId, innerId = ids.innerSplitId;
   const horizontalSide = corner.endsWith('left') ? 'left' : 'right';
   const verticalSide = corner.startsWith('top') ? 'top' : 'bottom';
-  const removed = removeTab(root, tabId);
+  const preserveSource = sourceGroupId === targetGroupId && source.tabs.length === 1 ? sourceGroupId : '';
+  const removed = removeTab(root, tabId, preserveSource);
   const remainingTarget = findGroup(removed, targetGroupId);
   if (!remainingTarget) return root;
   const horizontal = splitGroup(removed, targetGroupId, emptyId, '', 'row', innerId, horizontalSide === 'left' ? 'before' : 'after');

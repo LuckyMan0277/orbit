@@ -10,7 +10,7 @@ namespace Orbit {
         internal static string PathFor(string name) { Directory.CreateDirectory(Root); return Path.Combine(Root,name); }
     }
 
-    // Exercises the startup terminal over the real WebView2 bridge and ConPTY.
+    // Exercises an empty startup view and explicitly opened terminals over WebView2 and ConPTY.
     internal static class UiTest {
         internal static async Task Run(MainWindow window) {
             string report=TestArtifacts.PathFor("report.txt"),image=TestArtifacts.PathFor("orbit-desktop.png");
@@ -21,9 +21,11 @@ namespace Orbit {
                     if((await window.ExecuteForTest("Boolean(window.orbitDiagnostics && window.orbitDiagnostics().ready)"))=="true") { ready=true; break; }
                     await Task.Delay(50);
                 }
-                if(!ready) throw new TimeoutException("PowerShell did not start on launch");
-                if((await window.ExecuteForTest("window.orbitDiagnostics().profile"))!="\"powershell\"") throw new InvalidOperationException("startup shell was not PowerShell");
+                if(!ready) throw new TimeoutException("Orbit terminal start view did not initialize");
+                if((await window.ExecuteForTest("window.orbitDiagnostics().sessions.length"))!="0") throw new InvalidOperationException("a terminal started before the user opened one");
                 if((await window.ExecuteForTest("window.orbitDiagnostics().windowControls"))!="3") throw new InvalidOperationException("window controls are missing");
+                await window.ExecuteForTest("window.orbitUiTest.startPowerShell()");
+                await WaitFor(window,"window.orbitUiTest.diagnostics().sessions[0]?.profile==='powershell' && window.orbitUiTest.diagnostics().sessions[0]?.pid");
                 await SendAndWait(window,"Write-Output ([string]::Concat('ORBIT_TERMINAL_', 'SMOKE_PS'))","ORBIT_TERMINAL_SMOKE_PS");
 
                 await window.ExecuteForTest("window.orbitUiTest.startCmd()");
@@ -47,7 +49,7 @@ namespace Orbit {
                 } finally { window.Size=original; }
 
                 await VerifyWindowChrome(window);
-                File.WriteAllText(report,"PASS: startup PowerShell, PowerShell command output, CMD restart and command output, PowerShell restart, native window controls; resize "+(resizeChecked?"checked":"skipped (screen width did not permit a wider comparison)")+".\r\n");
+                File.WriteAllText(report,"PASS: empty startup view (no terminal process), explicitly opened PowerShell and command output, CMD restart and command output, PowerShell restart, native window controls; resize "+(resizeChecked?"checked":"skipped (screen width did not permit a wider comparison)")+".\r\n");
                 window.EndUiTest(false);
             } catch(Exception ex) { failure=ex; }
             if(failure!=null) {

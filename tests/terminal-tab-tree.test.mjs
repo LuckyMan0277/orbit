@@ -18,7 +18,7 @@ test('groups add, select, reorder and close tabs while preserving the active tab
   assert.equal(findGroup(tree, 'g1').activeTabId, 'b');
 });
 
-test('moving a tab merges groups and moving the last tab collapses its split', () => {
+test('center merge collapses the source split back into the target group', () => {
   const split = splitGroup(one(), 'g1', 'g2', 'b', 'row', 's1');
   const moved = dockTab(split, 'g2', 'b', 'g1', 'center', ids());
   assert.deepEqual(groupIds(moved), ['g1']);
@@ -35,13 +35,16 @@ test('cross-group center docking can insert before the target tab', () => {
   assert.equal(findGroup(moved, 'g2').activeTabId, 'a');
 });
 
-test('edge docking preserves tab sessions and self-drop of a lone tab is a no-op', () => {
+test('edge docking collapses a different source group but self-drops preserve the source base view', () => {
   const split = splitGroup(one(), 'g1', 'g2', 'b', 'row', 's1');
   const next = dockTab(split, 'g2', 'b', 'g1', 'top', ids());
   assert.deepEqual(tabIds(next), ['b', 'a']);
   assert.equal(next.direction, 'column');
   const lone = one();
-  assert.strictEqual(dockTab(lone, 'g1', 'a', 'g1', 'left', ids()), lone);
+  const selfSplit = dockTab(lone, 'g1', 'a', 'g1', 'left', ids());
+  assert.equal(selfSplit.direction, 'row');
+  assert.deepEqual(tabIds(selfSplit), ['a']);
+  assert.deepEqual(findGroup(selfSplit, 'g1').tabs, []);
 });
 
 test('corner docking makes a quarter group and an empty adjacent group without creating tabs', () => {
@@ -55,7 +58,18 @@ test('corner docking makes a quarter group and an empty adjacent group without c
   assert.equal(next.direction, 'row');
   assert.equal(next.second.direction, 'column');
   const lone = one();
-  assert.strictEqual(splitCorner(lone, 'g1', 'g1', 'a', 'top-left', {
+  const selfCorner = splitCorner(lone, 'g1', 'g1', 'a', 'top-left', {
     emptyGroupId: 'e', innerSplitId: 'i', tabGroupId: 't', outerSplitId: 'o',
-  }), lone);
+  });
+  assert.deepEqual(groupIds(selfCorner), ['t', 'e', 'g1']);
+  assert.deepEqual(findGroup(selfCorner, 'g1').tabs, []);
+  assert.deepEqual(findGroup(selfCorner, 'e').tabs, []);
+  assert.deepEqual(tabIds(selfCorner), ['a']);
+});
+
+test('closing the sole root tab leaves a base-view group', () => {
+  const root = one();
+  const empty = removeTab(root, 'a', 'g1');
+  assert.deepEqual(groupIds(empty), ['g1']);
+  assert.deepEqual(findGroup(empty, 'g1').tabs, []);
 });
