@@ -28,7 +28,7 @@ RestartApplications=no
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"
 
 [Files]
-Source: "..\release\Orbit\*"; DestDir: "{app}"; Excludes: "self-test-results.txt"; Flags: recursesubdirs ignoreversion
+Source: "..\release\Orbit\*"; DestDir: "{app}"; Excludes: "self-test-results.txt,shell-profile-test-results.txt"; Flags: recursesubdirs ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Orbit"; Filename: "{app}\Orbit.exe"

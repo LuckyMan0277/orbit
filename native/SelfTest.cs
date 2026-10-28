@@ -16,6 +16,7 @@ namespace Orbit {
             var log=new StringBuilder();int failed=0;
             Action<string,Action> test=(name,action)=>{try{action();log.AppendLine("PASS "+name);}catch(Exception ex){failed++;log.AppendLine("FAIL "+name+": "+ex);}};
             Directory.CreateDirectory(dir);
+            test("Git for Windows Bash resolver and command quoting",()=>GitBashTest.Run(Path.Combine(dir,"gitbash-resolver")));
             test("saved session metadata fixtures",()=>SessionHistoryTest.Run(Path.Combine(dir,"session-history")));
             test("installed Codex permanently deletes an isolated fixture",()=>CodexDeleteIntegrationTest.Run(Path.Combine(dir,"codex-delete")));
             test("UTF-8/UTF-16/CP949 round trip and conflict protection",()=> {

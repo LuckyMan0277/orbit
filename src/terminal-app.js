@@ -3,6 +3,7 @@ import { call, notify, on, isDesktop } from './bridge.js';
 import { TerminalPane } from './terminal.js';
 import { icon } from './ui.js';
 import { getDropPlacement } from './terminal-drop-placement.js';
+import { defaultShellFromSettings, settingsWithDefaultShell, shellDisplayName, shellProfiles } from './shell-profile.js';
 import { groupIds, tabIds, findGroup, addTab, activateTab, dockTab, removeTab, reorderTab, splitGroup, splitCorner, updateTabSplitRatio } from './terminal-tab-tree.js';
 
 const app = document.querySelector('#app');
@@ -21,6 +22,7 @@ app.innerHTML = `
           <button type="button" data-action="restart">현재 터미널 다시 시작<kbd>Ctrl Shift R</kbd></button>
           <button type="button" data-action="restart-powershell">PowerShell로 다시 시작</button>
           <button type="button" data-action="restart-cmd">명령 프롬프트로 다시 시작</button>
+          <button type="button" data-action="restart-gitbash">Git Bash로 다시 시작</button>
           <div class="menu-divider"></div>
           <button type="button" data-action="close-active">현재 터미널 닫기<kbd>Ctrl Shift W</kbd></button>
         </nav>
@@ -48,6 +50,8 @@ let activeGroupId = '';
 let folder = '';
 let initialized = false;
 let terminalNumber = 0;
+let savedSettings = {};
+let defaultProfile = 'powershell';
 
 const setStatus = text => { status.textContent = text; };
 const activePane = () => panes.get(activePaneId) || null;
@@ -63,7 +67,30 @@ function focusActivePane() {
   if (pane) pane.term.focus();
   else groupBaseViews.get(activeGroupId)?.focus();
 }
-const newTerminalName = profile => `${profile === 'cmd' ? '명령 프롬프트' : 'PowerShell'} ${++terminalNumber}`;
+function shellLabel(profile) { return shellDisplayName(profile); }
+const newTerminalName = profile => `${shellLabel(profile)} ${++terminalNumber}`;
+function loadShellPreference(value) {
+  savedSettings = value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+  defaultProfile = defaultShellFromSettings(savedSettings);
+  updateShellSelectors();
+}
+function updateShellSelectors() {
+  for (const view of groupBaseViews.values()) {
+    const select = view.querySelector('.base-shell-select');
+    if (select) select.value = defaultProfile;
+    const button = view.querySelector('.base-open-terminal');
+    if (button) button.title = `새 터미널 · ${shellLabel(defaultProfile)}`;
+  }
+}
+async function setDefaultProfile(profile) {
+  if (!shellProfiles.includes(profile)) return;
+  defaultProfile = profile;
+  const next = settingsWithDefaultShell(savedSettings, profile);
+  savedSettings = next;
+  updateShellSelectors();
+  try { await call('settings', next); }
+  catch (error) { errorBox.textContent = `기본 셸을 저장하지 못했습니다. ${error.message}`; errorBox.hidden = false; }
+}
 
 document.querySelector('#window-minimize').onclick = () => notify('windowMinimize');
 document.querySelector('#window-maximize').onclick = () => notify('windowMaximize');
@@ -78,6 +105,7 @@ document.querySelectorAll('[data-action]').forEach(button => button.addEventList
     restart: () => restartActive(),
     'restart-powershell': () => restartActive('powershell'),
     'restart-cmd': () => restartActive('cmd'),
+    'restart-gitbash': () => restartActive('gitbash'),
     'close-active': () => closeActivePane(),
   };
   actions[button.dataset.action]?.();
@@ -143,8 +171,8 @@ function renderLayout() {
       tab.className = 'terminal-tab'; tab.draggable = true; tab.tabIndex = id === group.activeTabId ? 0 : -1; tab.setAttribute('role','tab');
       tab.setAttribute('aria-selected', String(id === group.activeTabId));
       tab.classList.toggle('active', id === group.activeTabId);
-      tab.dataset.tabId = id; tab.dataset.groupId = group.id; tab.title = record?.name || (record?.profile === 'cmd' ? '명령 프롬프트' : 'PowerShell');
-      const label = document.createElement('span'); label.textContent = record?.name || 'PowerShell';
+      tab.dataset.tabId = id; tab.dataset.groupId = group.id; tab.title = record?.name || shellLabel(record?.profile);
+      const label = document.createElement('span'); label.textContent = record?.name || shellLabel(record?.profile);
       const close = document.createElement('button'); close.type = 'button'; close.className = 'tab-close'; close.setAttribute('aria-label', `${label.textContent} 탭 닫기`); close.textContent = '×';
       close.onclick = event => { event.stopPropagation(); closeTab(id); };
       tab.append(label, close);
@@ -254,15 +282,17 @@ function getGroupBaseView(id) {
   view = document.createElement('div');
   view.className = 'group-base-view'; view.dataset.groupId = id; view.tabIndex = 0;
   view.setAttribute('role', 'region'); view.setAttribute('aria-label', '새 터미널 열기');
-  view.innerHTML = '<div class="base-view-actions"><button type="button" data-profile="powershell" aria-label="PowerShell 열기">새 터미널</button><button type="button" data-profile="cmd" aria-label="명령 프롬프트 열기" title="명령 프롬프트">CMD</button></div>';
+  view.innerHTML = '<div class="base-view-actions"><button type="button" class="base-open-terminal" aria-label="새 터미널 열기">새 터미널</button><select class="base-shell-select" aria-label="새 터미널 기본 셸"><option value="cmd">CMD</option><option value="powershell">PowerShell</option><option value="gitbash">Git Bash</option></select></div>';
   view.addEventListener('pointerdown', () => activateGroup(id));
   view.addEventListener('click', event => {
-    const button = event.target.closest('[data-profile]');
+    const button = event.target.closest('.base-open-terminal');
     if (!button) { activateGroup(id); return; }
     event.stopPropagation();
-    if (isDesktop) void createTab(id, button.dataset.profile);
+    if (isDesktop) void createTab(id, defaultProfile);
   });
-  view.querySelectorAll('button').forEach(button => { button.disabled = !isDesktop; });
+  view.querySelector('.base-shell-select').addEventListener('change', event => { void setDefaultProfile(event.target.value); });
+  view.querySelector('.base-open-terminal').disabled = !isDesktop;
+  view.querySelector('.base-shell-select').value = defaultProfile;
   groupBaseViews.set(id, view); terminalHost.append(view);
   return view;
 }
@@ -399,11 +429,11 @@ function revealTab(strip, tab) {
 function updateActiveStatus() {
   const record = activePane();
   if (!record) { setStatus('터미널 준비'); return; }
-  const profile = record.profile === 'cmd' ? '명령 프롬프트' : 'PowerShell';
+  const profile = shellLabel(record.profile);
   setStatus(record.starting ? `${profile} · 시작 중` : record.error ? `${profile} · 시작 실패` : record.pane?.exited ? `${profile} · 종료` : `${profile} · 실행 중`);
 }
 
-async function createFirstPane(profile = 'powershell') {
+async function createFirstPane(profile = defaultProfile) {
   if (!isDesktop) return;
   if (!layoutRoot) layoutRoot = { type: 'group', id: crypto.randomUUID(), tabs: [], activeTabId: '' };
   activeGroupId ||= groupIds(layoutRoot)[0] || '';
@@ -415,11 +445,11 @@ async function createTab(groupId, requestedProfile) {
   if (!isDesktop) return;
   if (panes.size >= 8) return showLimitError();
   groupId ||= activeGroupId || groupForTab(layoutRoot, activePaneId)?.id || groupIds(layoutRoot).find(id => !findGroup(layoutRoot, id)?.tabs.length);
-  if (!layoutRoot || !groupId) return createFirstPane('powershell');
+  if (!layoutRoot || !groupId) return createFirstPane(defaultProfile);
   if (!findGroup(layoutRoot, groupId)) return;
   const id = crypto.randomUUID();
   const previous = activePane();
-  const profile = requestedProfile || previous?.profile || 'powershell';
+  const profile = requestedProfile || defaultProfile;
   layoutRoot = addTab(layoutRoot, groupId, id);
   activeGroupId = groupId;
   activePaneId = id;
@@ -430,9 +460,9 @@ async function createTab(groupId, requestedProfile) {
 }
 
 async function splitActive(direction) {
-  if (!layoutRoot) return createFirstPane('powershell');
+  if (!layoutRoot) return createFirstPane(defaultProfile);
   const group = activeGroup();
-  if (!group) return createFirstPane('powershell');
+  if (!group) return createFirstPane(defaultProfile);
   if (!group.tabs.length) {
     const newGroupId = crypto.randomUUID();
     layoutRoot = splitGroup(layoutRoot, group.id, newGroupId, '', direction, crypto.randomUUID());
@@ -445,7 +475,7 @@ async function splitActive(direction) {
   if (panes.size >= 8) return showLimitError();
   const id = crypto.randomUUID();
   const previous = activePane();
-  const profile = previous?.profile || 'powershell';
+  const profile = previous?.profile || defaultProfile;
   const newGroupId = crypto.randomUUID();
   const next = splitGroup(layoutRoot, group.id, newGroupId, id, direction, crypto.randomUUID());
   if (next === layoutRoot) return;
@@ -504,7 +534,7 @@ async function launchPane(paneId, profile) {
   }
 }
 
-async function restartActive(profile = activePane()?.profile || 'powershell') {
+async function restartActive(profile = activePane()?.profile || defaultProfile) {
   if (!activePaneId) return createFirstPane(profile);
   await launchPane(activePaneId, profile);
 }
@@ -598,12 +628,13 @@ function handleShortcut(event) {
 document.addEventListener('keydown', handleShortcut, true);
 
 async function initialize() {
-  if (!isDesktop) { browserSample(); return; }
   try {
     const data = await call('init');
+    loadShellPreference(data.settings);
     folder = typeof data.folder === 'string' ? data.folder : '';
     initialized = true;
     document.title = 'Orbit · Terminal';
+    if (!isDesktop) { browserSample(); return; }
     layoutRoot = { type: 'group', id: crypto.randomUUID(), tabs: [], activeTabId: '' };
     activeGroupId = layoutRoot.id;
     renderLayout();
@@ -632,6 +663,7 @@ window.orbitDiagnostics = () => ({ ready: initialized, windowControls: 3, active
 window.orbitUiTest = {
   startCmd: () => restartActive('cmd'),
   startPowerShell: () => restartActive('powershell'),
+  startGitBash: () => restartActive('gitbash'),
   send: async data => { const pane = activePane()?.pane; if (!pane?.started) throw new Error('active terminal is not running'); notify('write', { session: pane.id, data }); },
   split: direction => splitActive(direction === 'column' || direction === 'below' ? 'column' : 'row'),
   newTab: () => createTab(),

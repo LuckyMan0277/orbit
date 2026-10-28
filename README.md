@@ -8,8 +8,8 @@ Orbit은 빈 화면에서 시작해 사용자가 연 터미널만 실행하는 W
 
 ## 기능
 
-- **탭과 화면 분할**: 창마다 최대 8개 터미널 탭을 열 수 있습니다. 탭을 가운데로 끌면 탭 그룹에 합치거나 순서를 바꾸고, 가장자리로 끌면 좌우·상하 분할, 모서리로 끌면 4분할 배치가 됩니다. 비어 있는 영역은 시작 화면에서 PowerShell 또는 CMD를 열 수 있습니다. 분할 경계도 끌어 크기를 조정합니다.
-- **빈 시작 화면**: Orbit은 터미널 프로세스 없이 시작합니다. 가운데 `새 터미널`을 누르거나 `Ctrl+Shift+T`로 PowerShell을 열고, Orbit 메뉴에서 명령 프롬프트를 고를 수 있습니다. 새 창도 빈 화면으로 시작합니다.
+- **탭과 화면 분할**: 창마다 최대 8개 터미널 탭을 열 수 있습니다. 탭을 가운데로 끌면 탭 그룹에 합치거나 순서를 바꾸고, 가장자리로 끌면 좌우·상하 분할, 모서리로 끌면 4분할 배치가 됩니다. 빈 영역에는 선택한 기본 셸을 여는 `새 터미널` 버튼과 셸 선택 드롭다운이 있습니다. 분할 경계도 끌어 크기를 조정합니다.
+- **빈 시작 화면**: Orbit은 터미널 프로세스 없이 시작합니다. `새 터미널` 옆 드롭다운에서 CMD, PowerShell 또는 Git Bash를 기본 셸로 선택한 뒤 버튼이나 `Ctrl+Shift+T`로 실행합니다. 선택한 기본 셸은 다음 실행에도 유지됩니다. 새 창도 빈 화면으로 시작합니다.
 - **브라우저 미리보기**: 데스크톱 앱과 같은 빈 시작 화면을 보여줍니다. 브라우저에서는 셸이 실행되지 않습니다.
 
 ## 요구 사항
@@ -17,7 +17,7 @@ Orbit은 빈 화면에서 시작해 사용자가 연 터미널만 실행하는 W
 - Windows 10 1809 이상 / Windows 11, x64
 - .NET Framework 4.8
 - Microsoft Edge WebView2 Runtime
-- 현재 기본 앱은 Windows PowerShell과 명령 프롬프트를 시작합니다. Codex와 Claude Code는 셸에서 직접 실행할 수 있습니다.
+- CMD와 Windows PowerShell은 기본 제공됩니다. Git Bash를 사용하려면 Git for Windows가 설치되어 있어야 하며, 앱은 Git의 `bash.exe`를 ConPTY로 실행합니다. Codex와 Claude Code는 셸에서 직접 실행할 수 있습니다.
 
 ## 설치와 업데이트
 
@@ -33,8 +33,8 @@ Orbit은 빈 화면에서 시작해 사용자가 연 터미널만 실행하는 W
 
 ## 사용법
 
-1. Orbit을 시작하면 빈 화면이 보입니다. 가운데 `새 터미널` 또는 `CMD`를 눌러 해당 영역에 셸을 열거나, Orbit 메뉴에서 새 창·새 탭을 엽니다. 빈 영역은 분할 메뉴나 `Ctrl+Shift+D`·`Ctrl+Shift+E`로 나눌 수 있습니다.
-2. 탭을 같은 영역 가운데로 끌면 탭 순서를 바꾸거나 다른 탭 그룹으로 옮길 수 있습니다. 영역의 가장자리에 놓으면 좌우·상하로 나뉘고, 모서리에 놓으면 해당 4분할 영역으로 이동합니다. 빈 영역의 시작 화면에서 PowerShell 또는 CMD를 엽니다.
+1. Orbit을 시작하면 빈 화면이 보입니다. `새 터미널` 옆 드롭다운에서 CMD, PowerShell 또는 Git Bash를 고른 뒤 `새 터미널` 또는 `Ctrl+Shift+T`를 누르면 선택한 셸이 실행됩니다. 셸 선택은 기본값으로 저장됩니다. Orbit 메뉴에서 새 창·새 탭을 열 수 있고, 빈 영역은 분할 메뉴나 `Ctrl+Shift+D`·`Ctrl+Shift+E`로 나눌 수 있습니다.
+2. 탭을 같은 영역 가운데로 끌면 탭 순서를 바꾸거나 다른 탭 그룹으로 옮길 수 있습니다. 영역의 가장자리에 놓으면 좌우·상하로 나뉘고, 모서리에 놓으면 해당 4분할 영역으로 이동합니다. 비어 있는 영역에서 셸 드롭다운으로 기본 셸을 선택해 엽니다.
 3. 탭을 선택해 입력 대상을 바꾸고, 탭을 닫으면 해당 터미널만 종료됩니다. 마지막 터미널을 닫으면 빈 시작 화면으로 돌아갑니다. 탭 하나를 자기 영역의 가장자리나 모서리로 끌면 이동한 터미널과 비어 있는 시작 영역이 함께 남습니다.
 4. 터미널에서 선택한 텍스트는 복사하고, 붙여넣기는 줄바꿈을 명령 실행으로 보내지 않도록 처리합니다. 마우스 휠로 출력 기록을 스크롤할 수 있습니다. 기록을 위로 읽는 동안 새 출력이 와도 현재 위치를 유지하고, 아래쪽에 있을 때는 새 출력을 따라갑니다.
 
@@ -72,6 +72,10 @@ Get-Content release/Orbit/self-test-results.txt
 # 실제 창에서 빈 시작 화면, 명시적 PowerShell 열기, CMD 전환과 리사이즈를 확인하는 UI 검사
 Start-Process release/Orbit/Orbit.exe -ArgumentList '--ui-test' -Wait
 Get-Content artifacts/ui-test/report.txt
+
+# Git Bash 설치 검색과 ConPTY 실행/출력/종료 확인 (Git for Windows 필요)
+$p = Start-Process release/Orbit/Orbit.exe -ArgumentList '--shell-profile-test' -PassThru -Wait
+Get-Content release/Orbit/shell-profile-test-results.txt
 
 # 브라우저에서 샘플 터미널 화면 미리 보기 (실제 셸 실행 없음)
 npm run preview

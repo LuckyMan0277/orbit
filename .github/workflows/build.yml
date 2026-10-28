@@ -45,6 +45,26 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1
 
+      - name: Test Git Bash profile
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'release/Orbit/Orbit.exe').Path
+          $report = Join-Path (Split-Path $exe) 'shell-profile-test-results.txt'
+          Remove-Item -LiteralPath $report -Force -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath $exe -ArgumentList '--shell-profile-test' -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            try { $process.Kill() } catch { }
+            $details = if (Test-Path -LiteralPath $report) { Get-Content -Raw -LiteralPath $report } else { 'The smoke test did not produce a report.' }
+            Write-Host "::error title=Git Bash ConPTY smoke timeout::$details"
+            throw "Git Bash ConPTY smoke test timed out after 60 seconds. $details"
+          }
+          $details = if (Test-Path -LiteralPath $report) { Get-Content -Raw -LiteralPath $report } else { 'The smoke test did not produce a report.' }
+          if ($process.ExitCode -ne 0 -or $details -notmatch '(?m)^PASS:') {
+            Write-Host "::error title=Git Bash ConPTY smoke failed::$details"
+            throw "Git Bash ConPTY smoke test failed with exit code $($process.ExitCode). $details"
+          }
+          Write-Host $details
+
       - name: Ensure Inno Setup
         shell: pwsh
         run: |

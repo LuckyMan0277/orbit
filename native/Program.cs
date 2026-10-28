@@ -16,6 +16,7 @@ namespace Orbit {
     internal static class Program {
         [STAThread] private static int Main(string[] args) {
             if(args.Contains("--self-test")) return SelfTest.Run();
+            if(args.Contains("--shell-profile-test")) return ShellProfileTest.Run();
             try { Win32.SetProcessDpiAwarenessContext(new IntPtr(-4)); }catch(EntryPointNotFoundException) { }
             // Hosts (Tailscale Funnel) and the account service only accept TLS 1.2+; do not depend on this PC's .NET/registry defaults.
             try { System.Net.ServicePointManager.SecurityProtocol=(System.Net.SecurityProtocolType)3072|(System.Net.SecurityProtocolType)12288; }catch(NotSupportedException) { System.Net.ServicePointManager.SecurityProtocol=(System.Net.SecurityProtocolType)3072; }
@@ -198,7 +199,7 @@ namespace Orbit {
                     if(sessions.ContainsKey(sid) || !pendingTerminals.Add(sid))throw new InvalidOperationException("이미 생성 중인 터미널입니다.");
                     try {
                     string cwd=S(a,"cwd",initialFolder),profile=S(a,"profile","powershell"),resumeId=S(a,"resumeId");
-                    if(profile!="codex"&&profile!="claude"&&profile!="powershell"&&profile!="cmd")throw new InvalidOperationException("Unsupported terminal profile.");
+                    if(profile!="codex"&&profile!="claude"&&profile!="powershell"&&profile!="cmd"&&profile!="gitbash")throw new InvalidOperationException("Unsupported terminal profile.");
                     if(!String.IsNullOrEmpty(resumeId)) {
                         if((profile!="codex"&&profile!="claude")||!SessionHistory.IsId(resumeId))throw new InvalidOperationException("Invalid saved session.");
                         SavedSession saved;if(!savedSessions.TryGetValue(profile+":"+resumeId,out saved))throw new InvalidOperationException("Refresh saved sessions before resuming.");
@@ -210,12 +211,14 @@ namespace Orbit {
                     var secretNames=SecretNames(a);
                     var secretEnv=secretNames!=null?vault.Env(cwd,secretNames):AgentNote.GetsKeys(profile)?vault.Env(cwd,null):new Dictionary<string,string>();
                     var terminalEnv=TerminalEnvironment(sid,cwd,secretEnv);string agentNote=profile=="claude"?WriteAgentNote(sid,secretEnv.Keys):null;
+                    if(profile=="gitbash")foreach(var pair in GitBash.TerminalEnvironment())terminalEnv[pair.Key]=pair.Value;
                     string noteFlag=agentNote==null?"":" --append-system-prompt-file '"+agentNote.Replace("'","''")+"'";
                     // Codex takes its guide as one config value: a TOML literal string, which needs the doubled quotes of a PowerShell literal.
                     string codexFlag=profile=="codex"&&File.Exists(HelperPath)?" -c 'developer_instructions=''"+AgentNote.Codex(secretEnv.Keys)+"'''":"";
                     string shell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe");
                     string command="\""+shell+"\" -NoLogo -NoProfile -NoExit";
                     if(profile=="cmd")command="\""+Environment.GetEnvironmentVariable("ComSpec")+"\" /d";
+                    else if(profile=="gitbash")command=GitBash.Command(GitBash.ResolveExecutable());
                     else {
                         string script="[Console]::InputEncoding = New-Object System.Text.UTF8Encoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'; ";
                         if(profile=="codex" || profile=="claude") {
